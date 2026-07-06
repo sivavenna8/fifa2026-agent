@@ -1,4 +1,4 @@
-name: FIFA2026 Agent Test
+name: FIFA2026 Agent Test2
 
 on:
   workflow_dispatch:
