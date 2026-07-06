@@ -20,11 +20,12 @@
         </a>
         <div class="nav-actions">
           <span class="live-chip"><span class="pulse"></span> Agent live</span>
+          <button class="refresh-button reel-toggle" id="reel-toggle" type="button" aria-pressed="false">▣ Reel Mode</button>
           <button class="refresh-button" onclick="window.location.reload()" type="button">Refresh data ↻</button>
         </div>
       </nav>
 
-      <div class="hero-grid">
+      <div class="hero-grid secondary-content">
         <div class="hero-copy">
           <p class="eyebrow">FIFA World Cup 2026 · Dynamic intelligence</p>
           <h1>Every result reshapes<br><span>the road to glory.</span></h1>
@@ -41,15 +42,14 @@
         </div>
       </div>
 
-      <div class="metric-strip">
-        <div class="metric"><strong>{{ dashboard.counts.completed }}</strong><span>Results locked</span></div>
-        <div class="metric"><strong>{{ dashboard.counts.confirmed }}</strong><span>Confirmed fixtures</span></div>
-        <div class="metric"><strong>{{ dashboard.counts.predicted }}</strong><span>Projected matches</span></div>
-        <div class="metric run-metric">
-          <span class="status-dot {{ dashboard.latest_run.status if dashboard.latest_run else 'waiting' }}"></span>
-          <div><strong>{{ dashboard.latest_run.status|title if dashboard.latest_run else 'Waiting' }}</strong><span>Latest agent run</span></div>
-        </div>
+      {% if dashboard.latest_snapshot %}
+      <div class="showcase-summary">
+        <article class="summary-card champion-summary"><span class="summary-glyph">◆</span><div><small>Predicted Champion</small><strong>{{ dashboard.champion or 'TBD' }}</strong><em>{{ dashboard.strengths.get(dashboard.champion, 50) }} strength</em></div></article>
+        <article class="summary-card"><span class="summary-glyph result-glyph">FT</span><div><small>Latest Completed Result</small>{% if dashboard.latest_completed %}<strong class="summary-fixture">{{ dashboard.latest_completed.home_team }} <b>{{ dashboard.latest_completed.home_score }}–{{ dashboard.latest_completed.away_score }}</b> {{ dashboard.latest_completed.away_team }}</strong><em>{{ dashboard.latest_completed.stage }}</em>{% else %}<strong>Waiting</strong>{% endif %}</div></article>
+        <article class="summary-card change-card"><span class="summary-glyph change-glyph">↗</span><div><small>Biggest Bracket Change</small><strong>{{ dashboard.biggest_change }}</strong><em>Latest snapshot delta</em></div></article>
+        <article class="summary-card"><span class="summary-glyph next-glyph">▶</span><div><small>Next Match</small>{% if dashboard.next_match %}<strong class="summary-fixture">{{ dashboard.next_match.home_team }} <b>vs</b> {{ dashboard.next_match.away_team }}</strong><em>{{ dashboard.next_match.stage }} · Pick: {{ dashboard.next_match.winner }}</em>{% else %}<strong>Awaiting fixture</strong>{% endif %}</div></article>
       </div>
+      {% endif %}
     </header>
 
     <main>
@@ -60,7 +60,7 @@
         <code>python main.py daily</code>
       </section>
       {% else %}
-      <section class="overview-grid">
+      <section class="overview-grid secondary-content">
         <article class="panel results-panel">
           <div class="section-heading">
             <div><p class="section-kicker">Scoreboard</p><h2>Latest results</h2></div>
@@ -97,20 +97,28 @@
       <section class="bracket-section">
         <div class="section-heading bracket-title">
           <div><p class="section-kicker">Live tournament map</p><h2>Dynamic knockout bracket</h2></div>
-          <div class="legend">
-            <span><i class="legend-dot actual"></i> Actual result</span>
-            <span><i class="legend-dot confirmed"></i> Confirmed</span>
-            <span><i class="legend-dot predicted"></i> Predicted</span>
+          <div class="bracket-controls">
+            <div class="bracket-tabs" role="tablist" aria-label="Bracket view">
+              <button type="button" role="tab" data-view="full" aria-selected="false">Full Bracket</button>
+              <button type="button" role="tab" data-view="quarter-finals" aria-selected="false">From Quarter-finals</button>
+              <button type="button" role="tab" data-view="final-path" aria-selected="true">Final Path</button>
+            </div>
+            <div class="legend">
+              <span><i class="legend-dot actual"></i> Actual</span>
+              <span><i class="legend-dot confirmed"></i> Confirmed</span>
+              <span><i class="legend-dot predicted"></i> Predicted</span>
+            </div>
           </div>
         </div>
+        <div class="showcase-bar"><span>Showcase Mode</span><b id="view-description">Champion route · Quarter-finals to Final</b></div>
         <div class="bracket-scroll">
-          <div class="bracket">
+          <div class="bracket" data-view="final-path">
             {% for stage in dashboard.stages %}
-            <div class="stage-column stage-{{ loop.index }}">
+            <div class="stage-column stage-{{ loop.index }}" data-stage="{{ stage.name }}">
               <div class="stage-header"><span>0{{ loop.index }}</span><h3>{{ stage.name }}</h3><b>{{ stage.matches|length }} matches</b></div>
               <div class="stage-matches">
                 {% for match in stage.matches %}
-                <article class="match-card {{ match.fixture_type }}">
+                <article class="match-card {{ match.fixture_type }}" data-path="{{ 'true' if match.match_id in dashboard.champion_path_ids else 'false' }}">
                   <div class="match-meta">
                     <span>Match {{ match.match_number }}</span>
                     <span class="type-label">{{ 'Actual' if match.fixture_type == 'completed' else match.fixture_type|title }}</span>
@@ -135,11 +143,14 @@
               </div>
             </div>
             {% endfor %}
+            <aside class="champion-podium">
+              <div class="podium-rings"></div><span class="podium-star">✦</span><small>2026 projected champion</small><strong>{{ dashboard.champion }}</strong><b>{{ dashboard.strengths.get(dashboard.champion, 50) }} strength</b><em>Bracket confidence leader</em>
+            </aside>
           </div>
         </div>
       </section>
 
-      <section class="lower-grid">
+      <section class="lower-grid secondary-content">
         <article class="panel history-panel">
           <div class="section-heading">
             <div><p class="section-kicker">Audit trail</p><h2>Prediction history</h2></div>
@@ -163,16 +174,52 @@
           <div class="telegram-top">
             <span class="telegram-logo">➤</span>
             <div><p class="section-kicker">Ready to broadcast</p><h2>Telegram briefing</h2></div>
-            <span class="preview-pill">Preview</span>
+            <button class="copy-button" id="copy-telegram" type="button">Copy Telegram Summary</button>
           </div>
-          <pre>{{ dashboard.telegram_preview }}</pre>
-          <div class="telegram-foot"><span>Generated from the latest bracket snapshot</span><strong>Not sent</strong></div>
+          <pre id="telegram-text">{{ dashboard.telegram_preview }}</pre>
+          <div class="telegram-foot"><span id="copy-status">Generated from the latest bracket snapshot</span><strong>Not sent</strong></div>
         </article>
       </section>
       {% endif %}
     </main>
 
-    <footer><span>FIFA2026 Dynamic Bracket Agent</span><span>Transparent model · Actual results always win</span></footer>
+    <footer class="secondary-content"><span>FIFA2026 Dynamic Bracket Agent</span><span>Transparent model · Actual results always win</span></footer>
   </div>
+  <script>
+    (() => {
+      const bracket = document.querySelector('.bracket');
+      if (!bracket) return;
+      const tabs = [...document.querySelectorAll('.bracket-tabs button')];
+      const descriptions = {full:'Every knockout round · Compact overview','quarter-finals':'All remaining routes · Quarter-finals to Final','final-path':'Champion route · Quarter-finals to Final'};
+      const setView = view => {
+        bracket.dataset.view = view;
+        tabs.forEach(tab => tab.setAttribute('aria-selected', String(tab.dataset.view === view)));
+        document.getElementById('view-description').textContent = descriptions[view];
+      };
+      tabs.forEach(tab => tab.addEventListener('click', () => setView(tab.dataset.view)));
+      const reel = document.getElementById('reel-toggle');
+      reel.addEventListener('click', () => {
+        const enabled = document.body.classList.toggle('reel-mode');
+        reel.setAttribute('aria-pressed', String(enabled));
+        reel.textContent = enabled ? '□ Exit Reel Mode' : '▣ Reel Mode';
+        if (enabled) setView('final-path');
+      });
+      const copy = document.getElementById('copy-telegram');
+      if (copy) copy.addEventListener('click', async () => {
+        const text = document.getElementById('telegram-text').textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          copy.textContent = 'Copied ✓'; document.getElementById('copy-status').textContent = 'Summary copied to clipboard';
+        } catch (_) {
+          const field = document.createElement('textarea'); field.value = text;
+          field.style.position = 'fixed'; field.style.opacity = '0'; document.body.appendChild(field);
+          field.select(); const copied = document.execCommand('copy'); field.remove();
+          copy.textContent = copied ? 'Copied ✓' : 'Copy unavailable';
+          document.getElementById('copy-status').textContent = copied ? 'Summary copied to clipboard' : 'Select the preview text to copy';
+        }
+        setTimeout(() => copy.textContent = 'Copy Telegram Summary', 1800);
+      });
+    })();
+  </script>
 </body>
 </html>

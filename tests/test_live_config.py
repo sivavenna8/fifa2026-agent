@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 import main
 from src.api_client import FixtureAPIClient
-from src.config import get_settings, parse_bool
+from src.config import get_settings, load_env, parse_bool
 
 
 class LiveConfigurationTests(unittest.TestCase):
@@ -57,6 +57,14 @@ class LiveConfigurationTests(unittest.TestCase):
         self.assertTrue(parse_bool("TRUE"))
         with self.assertRaises(ValueError):
             parse_bool("sometimes")
+
+    def test_runtime_environment_secret_overrides_dotenv_value(self) -> None:
+        env_file = Mock()
+        env_file.exists.return_value = True
+        env_file.read_text.return_value = "FOOTBALL_DATA_API_KEY=file-token\n"
+        with patch.dict(os.environ, {"FOOTBALL_DATA_API_KEY": "render-token"}, clear=True):
+            load_env(env_file)
+            self.assertEqual(os.environ["FOOTBALL_DATA_API_KEY"], "render-token")
 
 
 if __name__ == "__main__":

@@ -43,6 +43,14 @@ python main.py web                   # dashboard at http://localhost:8000
 
 Run `python main.py web`, then open [http://localhost:8000](http://localhost:8000). The responsive World Cup-style dashboard reads directly from SQLite and shows the latest run, actual results, eliminated teams, every bracket round, strength badges, snapshot changes, the projected champion, and the current Telegram briefing preview. Use `python main.py daily` to fetch and rebuild; refresh the dashboard to display the new snapshot.
 
+### Showcase and Reel Mode
+
+- **Final Path** follows the predicted champion through one quarter-final, one semi-final, and the final.
+- **From Quarter-finals** shows all four quarter-finals, both semi-finals, the final, and champion card.
+- **Full Bracket** restores every knockout round in a compact analytics view.
+- **Reel Mode** hides supporting panels, leaving the summary, bracket, and champion treatment for clean 16:9 or vertical capture.
+- **Copy Telegram Summary** copies the generated briefing without sending anything.
+
 Use `--verbose` to expose every match resolution and model update in the logs.
 
 ## Configure football-data.org live fixtures
@@ -94,6 +102,26 @@ python D:\fifa2026\main.py daily
 ```
 
 Set the task's working directory to `D:\fifa2026`.
+
+## Deploy on Render
+
+The repository includes a Render Blueprint at `render.yaml`. It uses this production command:
+
+```text
+uvicorn src.web_app:app --host 0.0.0.0 --port $PORT
+```
+
+Deployment steps:
+
+1. Push the project to a GitHub, GitLab, or Bitbucket repository.
+2. In Render, choose **New → Blueprint** and select the repository.
+3. When prompted for `FOOTBALL_DATA_API_KEY`, enter the football-data.org token. It is configured with `sync: false`, so the secret is stored by Render and is not committed to the repository.
+4. Apply the Blueprint and wait for `/health` to report healthy.
+5. Open the generated `onrender.com` URL.
+
+The Blueprint mounts a 1 GB persistent disk at `/var/data` and sets `DATABASE_PATH=/var/data/fifa2026.db`. Persistent disks require a paid Render web-service plan; this preserves bracket snapshots across deploys and restarts. To experiment on a free ephemeral service, remove the `disk` block and change `DATABASE_PATH` to `data/fifa2026.db`, understanding that the SQLite history will reset on a redeploy or restart.
+
+On startup, `src.web_app:app` opens SQLite. If no matches exist it fetches the configured football-data.org competition, and if no snapshot exists it builds the first bracket before serving traffic. Runtime environment variables take precedence over local `.env` values. Never add the real API key—or any Telegram credentials—to `render.yaml`, `.env.example`, or source control.
 
 ## SQLite model
 

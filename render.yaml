@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: fifa2026-bracket-agent
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.web_app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: USE_SAMPLE_DATA
+        value: "false"
+      - key: FOOTBALL_DATA_API_KEY
+        sync: false
+      - key: FOOTBALL_DATA_BASE_URL
+        value: https://api.football-data.org/v4
+      - key: FOOTBALL_DATA_COMPETITION
+        value: WC
+      - key: DATABASE_PATH
+        value: /var/data/fifa2026.db
+    disk:
+      name: fifa2026-data
+      mountPath: /var/data
+      sizeGB: 1
