@@ -1,0 +1,35 @@
+name: FIFA2026 Agent
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8 * * *"
+    - cron: "0 20 * * *"
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+
+    env:
+      FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+      FOOTBALL_DATA_BASE_URL: https://api.football-data.org/v4
+      FOOTBALL_DATA_COMPETITION: WC
+      USE_SAMPLE_DATA: "false"
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      DATABASE_PATH: data/fifa2026.db
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run FIFA agent
+        run: python main.py daily
