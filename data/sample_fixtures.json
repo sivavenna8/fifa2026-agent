@@ -1,0 +1,39 @@
+{
+  "demo_note": "Illustrative knockout data for offline demos; replace or augment through FIFA_API_URL.",
+  "matches": [
+    {"id":"R32-01","stage":"Round of 32","match_number":1,"kickoff":"2026-06-28T16:00:00Z","status":"completed","home_team":"Argentina","away_team":"Canada","home_score":2,"away_score":0},
+    {"id":"R32-02","stage":"Round of 32","match_number":2,"kickoff":"2026-06-28T20:00:00Z","status":"completed","home_team":"Denmark","away_team":"Morocco","home_score":1,"away_score":1,"home_penalties":3,"away_penalties":4},
+    {"id":"R32-03","stage":"Round of 32","match_number":3,"kickoff":"2026-06-29T16:00:00Z","status":"completed","home_team":"France","away_team":"Brazil","home_score":1,"away_score":2},
+    {"id":"R32-04","stage":"Round of 32","match_number":4,"kickoff":"2026-06-29T20:00:00Z","status":"completed","home_team":"Japan","away_team":"Switzerland","home_score":2,"away_score":1},
+    {"id":"R32-05","stage":"Round of 32","match_number":5,"kickoff":"2026-06-30T16:00:00Z","status":"completed","home_team":"England","away_team":"Senegal","home_score":2,"away_score":1},
+    {"id":"R32-06","stage":"Round of 32","match_number":6,"kickoff":"2026-06-30T20:00:00Z","status":"completed","home_team":"Colombia","away_team":"Austria","home_score":1,"away_score":0},
+    {"id":"R32-07","stage":"Round of 32","match_number":7,"kickoff":"2026-07-01T16:00:00Z","status":"completed","home_team":"Spain","away_team":"Nigeria","home_score":3,"away_score":1},
+    {"id":"R32-08","stage":"Round of 32","match_number":8,"kickoff":"2026-07-01T20:00:00Z","status":"completed","home_team":"Croatia","away_team":"USA","home_score":1,"away_score":2},
+    {"id":"R32-09","stage":"Round of 32","match_number":9,"kickoff":"2026-07-02T16:00:00Z","status":"scheduled","home_team":"Portugal","away_team":"Cameroon"},
+    {"id":"R32-10","stage":"Round of 32","match_number":10,"kickoff":"2026-07-02T20:00:00Z","status":"scheduled","home_team":"Mexico","away_team":"Belgium"},
+    {"id":"R32-11","stage":"Round of 32","match_number":11,"kickoff":"2026-07-03T16:00:00Z","status":"scheduled","home_team":"Germany","away_team":"South Korea"},
+    {"id":"R32-12","stage":"Round of 32","match_number":12,"kickoff":"2026-07-03T20:00:00Z","status":"scheduled","home_team":"Ecuador","away_team":"Norway"},
+    {"id":"R32-13","stage":"Round of 32","match_number":13,"kickoff":"2026-07-04T16:00:00Z","status":"scheduled","home_team":"Netherlands","away_team":"Ghana"},
+    {"id":"R32-14","stage":"Round of 32","match_number":14,"kickoff":"2026-07-04T20:00:00Z","status":"scheduled","home_team":"Italy","away_team":"Iran"},
+    {"id":"R32-15","stage":"Round of 32","match_number":15,"kickoff":"2026-07-05T16:00:00Z","status":"scheduled","home_team":"Australia","away_team":"Saudi Arabia"},
+    {"id":"R32-16","stage":"Round of 32","match_number":16,"kickoff":"2026-07-05T20:00:00Z","status":"scheduled","home_team":"Costa Rica","away_team":"Panama"},
+
+    {"id":"R16-01","stage":"Round of 16","match_number":17,"kickoff":"2026-07-06T16:00:00Z","status":"scheduled","home_source_match":"R32-01","away_source_match":"R32-02"},
+    {"id":"R16-02","stage":"Round of 16","match_number":18,"kickoff":"2026-07-06T20:00:00Z","status":"scheduled","home_source_match":"R32-03","away_source_match":"R32-04"},
+    {"id":"R16-03","stage":"Round of 16","match_number":19,"kickoff":"2026-07-07T16:00:00Z","status":"scheduled","home_source_match":"R32-05","away_source_match":"R32-06"},
+    {"id":"R16-04","stage":"Round of 16","match_number":20,"kickoff":"2026-07-07T20:00:00Z","status":"scheduled","home_source_match":"R32-07","away_source_match":"R32-08"},
+    {"id":"R16-05","stage":"Round of 16","match_number":21,"kickoff":"2026-07-08T16:00:00Z","status":"scheduled","home_source_match":"R32-09","away_source_match":"R32-10"},
+    {"id":"R16-06","stage":"Round of 16","match_number":22,"kickoff":"2026-07-08T20:00:00Z","status":"scheduled","home_source_match":"R32-11","away_source_match":"R32-12"},
+    {"id":"R16-07","stage":"Round of 16","match_number":23,"kickoff":"2026-07-09T16:00:00Z","status":"scheduled","home_source_match":"R32-13","away_source_match":"R32-14"},
+    {"id":"R16-08","stage":"Round of 16","match_number":24,"kickoff":"2026-07-09T20:00:00Z","status":"scheduled","home_source_match":"R32-15","away_source_match":"R32-16"},
+
+    {"id":"QF-01","stage":"Quarter-final","match_number":25,"kickoff":"2026-07-11T16:00:00Z","status":"scheduled","home_source_match":"R16-01","away_source_match":"R16-02"},
+    {"id":"QF-02","stage":"Quarter-final","match_number":26,"kickoff":"2026-07-11T20:00:00Z","status":"scheduled","home_source_match":"R16-03","away_source_match":"R16-04"},
+    {"id":"QF-03","stage":"Quarter-final","match_number":27,"kickoff":"2026-07-12T16:00:00Z","status":"scheduled","home_source_match":"R16-05","away_source_match":"R16-06"},
+    {"id":"QF-04","stage":"Quarter-final","match_number":28,"kickoff":"2026-07-12T20:00:00Z","status":"scheduled","home_source_match":"R16-07","away_source_match":"R16-08"},
+
+    {"id":"SF-01","stage":"Semi-final","match_number":29,"kickoff":"2026-07-14T20:00:00Z","status":"scheduled","home_source_match":"QF-01","away_source_match":"QF-02"},
+    {"id":"SF-02","stage":"Semi-final","match_number":30,"kickoff":"2026-07-15T20:00:00Z","status":"scheduled","home_source_match":"QF-03","away_source_match":"QF-04"},
+    {"id":"F-01","stage":"Final","match_number":31,"kickoff":"2026-07-19T19:00:00Z","status":"scheduled","home_source_match":"SF-01","away_source_match":"SF-02"}
+  ]
+}

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#071d22">
+  <title>FIFA2026 Dynamic Bracket Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <nav class="nav">
+        <a class="brand" href="/" aria-label="FIFA2026 dashboard home">
+          <span class="brand-mark">26</span>
+          <span>Bracket<span class="brand-accent">OS</span></span>
+        </a>
+        <div class="nav-actions">
+          <span class="live-chip"><span class="pulse"></span> Agent live</span>
+          <button class="refresh-button" onclick="window.location.reload()" type="button">Refresh data ↻</button>
+        </div>
+      </nav>
+
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">FIFA World Cup 2026 · Dynamic intelligence</p>
+          <h1>Every result reshapes<br><span>the road to glory.</span></h1>
+          <p class="hero-description">Actual scores lock in. Predictions flow forward. One living bracket recalculated after every match.</p>
+        </div>
+        <div class="winner-orbit">
+          <div class="orbit-ring"></div>
+          <div class="winner-core">
+            <span class="trophy">◆</span>
+            <span class="winner-label">Projected champion</span>
+            <strong>{{ dashboard.champion or 'TBD' }}</strong>
+            {% if dashboard.champion %}<span class="strength-large">{{ dashboard.strengths.get(dashboard.champion, 50) }} strength</span>{% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="metric-strip">
+        <div class="metric"><strong>{{ dashboard.counts.completed }}</strong><span>Results locked</span></div>
+        <div class="metric"><strong>{{ dashboard.counts.confirmed }}</strong><span>Confirmed fixtures</span></div>
+        <div class="metric"><strong>{{ dashboard.counts.predicted }}</strong><span>Projected matches</span></div>
+        <div class="metric run-metric">
+          <span class="status-dot {{ dashboard.latest_run.status if dashboard.latest_run else 'waiting' }}"></span>
+          <div><strong>{{ dashboard.latest_run.status|title if dashboard.latest_run else 'Waiting' }}</strong><span>Latest agent run</span></div>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      {% if not dashboard.latest_snapshot %}
+      <section class="empty-state">
+        <p class="eyebrow">No snapshot available</p>
+        <h2>Kick off the bracket agent.</h2>
+        <code>python main.py daily</code>
+      </section>
+      {% else %}
+      <section class="overview-grid">
+        <article class="panel results-panel">
+          <div class="section-heading">
+            <div><p class="section-kicker">Scoreboard</p><h2>Latest results</h2></div>
+            <span class="date-tag">Snapshot #{{ dashboard.latest_snapshot.id }}</span>
+          </div>
+          <div class="result-list">
+            {% for match in dashboard.latest_results %}
+            <div class="result-row">
+              <div class="result-stage">{{ match.stage }}</div>
+              <div class="result-teams">
+                <span class="{{ 'result-winner' if match.winner == match.home_team else '' }}">{{ match.home_team }}</span>
+                <strong>{{ match.home_score }}–{{ match.away_score }}</strong>
+                <span class="{{ 'result-winner' if match.winner == match.away_team else '' }}">{{ match.away_team }}</span>
+              </div>
+              {% if match.home_penalties is not none %}<span class="penalty-note">{{ match.home_penalties }}–{{ match.away_penalties }} pens</span>{% endif %}
+            </div>
+            {% else %}<p class="muted">No completed matches yet.</p>{% endfor %}
+          </div>
+        </article>
+
+        <article class="panel elimination-panel">
+          <div class="section-heading">
+            <div><p class="section-kicker">Tournament status</p><h2>Eliminated teams</h2></div>
+            <span class="count-bubble">{{ dashboard.eliminated|length }}</span>
+          </div>
+          <div class="team-cloud">
+            {% for team in dashboard.eliminated %}
+            <span class="eliminated-chip"><span class="strike-dot">×</span>{{ team }} <b>{{ dashboard.strengths.get(team, 50) }}</b></span>
+            {% else %}<p class="muted">No teams eliminated yet.</p>{% endfor %}
+          </div>
+        </article>
+      </section>
+
+      <section class="bracket-section">
+        <div class="section-heading bracket-title">
+          <div><p class="section-kicker">Live tournament map</p><h2>Dynamic knockout bracket</h2></div>
+          <div class="legend">
+            <span><i class="legend-dot actual"></i> Actual result</span>
+            <span><i class="legend-dot confirmed"></i> Confirmed</span>
+            <span><i class="legend-dot predicted"></i> Predicted</span>
+          </div>
+        </div>
+        <div class="bracket-scroll">
+          <div class="bracket">
+            {% for stage in dashboard.stages %}
+            <div class="stage-column stage-{{ loop.index }}">
+              <div class="stage-header"><span>0{{ loop.index }}</span><h3>{{ stage.name }}</h3><b>{{ stage.matches|length }} matches</b></div>
+              <div class="stage-matches">
+                {% for match in stage.matches %}
+                <article class="match-card {{ match.fixture_type }}">
+                  <div class="match-meta">
+                    <span>Match {{ match.match_number }}</span>
+                    <span class="type-label">{{ 'Actual' if match.fixture_type == 'completed' else match.fixture_type|title }}</span>
+                  </div>
+                  {% for side in ['home', 'away'] %}
+                    {% set team = match[side + '_team'] or 'TBD' %}
+                    {% set score = match[side + '_score'] %}
+                    <div class="team-row {{ 'advancing' if match.winner == team else '' }} {{ 'eliminated' if team in dashboard.eliminated_set else '' }}">
+                      <span class="team-seed">{{ loop.index }}</span>
+                      <span class="team-name">{{ team }}</span>
+                      {% if team != 'TBD' %}<span class="strength-badge">{{ dashboard.strengths.get(team, 50) }}</span>{% endif %}
+                      {% if match.fixture_type == 'completed' %}<strong class="score">{{ score }}</strong>{% elif match.winner == team %}<span class="pick-mark">✓</span>{% endif %}
+                    </div>
+                  {% endfor %}
+                  {% if match.fixture_type != 'completed' %}
+                  <div class="prediction-foot">Model pick <strong>{{ match.winner or 'Awaiting fixture' }}</strong></div>
+                  {% elif match.home_penalties is not none %}
+                  <div class="prediction-foot">Penalties <strong>{{ match.home_penalties }}–{{ match.away_penalties }}</strong></div>
+                  {% endif %}
+                </article>
+                {% endfor %}
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </section>
+
+      <section class="lower-grid">
+        <article class="panel history-panel">
+          <div class="section-heading">
+            <div><p class="section-kicker">Audit trail</p><h2>Prediction history</h2></div>
+            <span class="date-tag">{{ dashboard.snapshots|length }} snapshots</span>
+          </div>
+          <div class="timeline">
+            {% for snapshot in dashboard.snapshots %}
+            <div class="timeline-item {{ 'current' if loop.first else '' }}">
+              <div class="timeline-rail"><span></span></div>
+              <div class="timeline-content">
+                <div class="timeline-top"><strong>Snapshot #{{ snapshot.id }}</strong><time>{{ snapshot.created_at[:16].replace('T', ' · ') }} UTC</time></div>
+                <p>{{ snapshot.change_summary }}</p>
+                <span class="champion-tag">Champion pick: {{ snapshot.predicted_winner or 'TBD' }}</span>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </article>
+
+        <article class="telegram-card">
+          <div class="telegram-top">
+            <span class="telegram-logo">➤</span>
+            <div><p class="section-kicker">Ready to broadcast</p><h2>Telegram briefing</h2></div>
+            <span class="preview-pill">Preview</span>
+          </div>
+          <pre>{{ dashboard.telegram_preview }}</pre>
+          <div class="telegram-foot"><span>Generated from the latest bracket snapshot</span><strong>Not sent</strong></div>
+        </article>
+      </section>
+      {% endif %}
+    </main>
+
+    <footer><span>FIFA2026 Dynamic Bracket Agent</span><span>Transparent model · Actual results always win</span></footer>
+  </div>
+</body>
+</html>
