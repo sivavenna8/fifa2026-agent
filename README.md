@@ -1,23 +1,64 @@
-# FIFA2026 Dynamic Bracket Agent
+# FIFA 2026 Dynamic Bracket Agent
 
-A transparent, offline-first Python agent that merges actual knockout results with predictions, rebuilds every downstream World Cup path, stores daily snapshots in SQLite, and prepares a Telegram briefing.
+**A Python automation system that merges confirmed football results with transparent predictions, rebuilds every affected knockout path and publishes an auditable tournament briefing.**
 
-The included fixture file is **illustrative demo data**, not an official 2026 feed. Set `USE_SAMPLE_DATA=false` and configure football-data.org for live use.
+The agent treats the knockout bracket as a dependency graph rather than a static set of picks. When a real result changes an advancing team, it propagates that winner through every downstream match, recalculates future predictions, persists the new state and prepares both a dashboard and Telegram update.
+
+> The bundled fixtures are illustrative demo data, not an official 2026 feed. Set `USE_SAMPLE_DATA=false` and configure football-data.org for live operation.
+
+## Why it exists
+
+Static tournament predictions become stale as soon as an upset occurs. This project keeps confirmed results immutable, resolves future participants from source matches and makes each rebuild inspectable through SQLite snapshots and change summaries.
 
 ## What it does
 
-- Fetches a configured JSON API and falls back to local fixtures, then cached SQLite data.
-- Keeps completed results fixed—even if a later stale feed marks them scheduled.
-- Resolves every future bracket slot from its source match.
-- Removes knockout losers from all future prediction paths.
-- Scores teams using local strength, recent win rate, goals, knockout wins, opponent quality, and matchup strength.
-- Handles drawn knockout results through penalty scores or an explicit `winner_team`.
-- Saves every rebuild in `predictions`, `bracket_snapshots`, and `agent_runs`.
-- Prints a complete real/predicted bracket and generates a six-section Telegram update.
+- Fetches fixtures from a configurable API with safe local and SQLite-cache fallbacks
+- Preserves completed results when a later provider response is stale
+- Resolves the full 31-match knockout graph from actual and predicted winners
+- Recalculates affected paths and removes eliminated teams
+- Persists matches, predictions, snapshots and run summaries in SQLite
+- Produces a responsive FastAPI dashboard and Telegram briefing
+- Supports scheduled execution through GitHub Actions and deployment through Render
+
+## System flow
+
+```text
+football-data.org / demo fixtures
+              |
+              v
+        API adapter
+              |
+              v
+   SQLite state + bracket engine
+              |
+              v
+ transparent prediction engine
+        |              |
+        v              v
+ FastAPI dashboard   Telegram briefing
+```
+
+## Tech stack
+
+- **Backend:** Python, FastAPI
+- **Data:** SQLite, JSON fixture adapters
+- **Integrations:** football-data.org, Telegram Bot API
+- **Automation:** GitHub Actions scheduled workflows
+- **Deployment:** Render Blueprint with optional persistent disk
+- **Quality:** unit and integration-style tests for configuration, bracket updates, dashboard and startup behaviour
+
+## Engineering highlights
+
+- **Dynamic dependency resolution:** actual winners propagate through quarter-finals, semi-finals, the final and champion path.
+- **Data integrity:** completed matches are never overwritten by a non-completed copy from a stale feed.
+- **Auditable state:** every rebuild records predictions, a complete bracket snapshot and a human-readable run summary.
+- **Resilient integration boundary:** live mode never silently falls back to demo fixtures; cached live data is the only fallback.
+- **Transparent predictions:** team strength, recent form, goals, knockout results and opponent quality remain inspectable.
+- **Operational delivery:** the same state powers CLI workflows, the web dashboard and outbound Telegram summaries.
 
 ## Quick start
 
-Requires Python 3.10 or later. No third-party packages are required.
+Requires Python 3.10 or later.
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -25,7 +66,7 @@ Copy-Item .env.example .env
 python main.py daily
 ```
 
-On the first run, `daily` loads `data/sample_fixtures.json`, creates `data/fifa2026.db`, rebuilds all 31 knockout matches, prints the full bracket, and prints a Telegram preview when credentials are absent.
+On the first demo run, `daily` loads `data/sample_fixtures.json`, creates `data/fifa2026.db`, rebuilds all 31 knockout matches and prints a Telegram preview when credentials are absent.
 
 ## Commands
 
