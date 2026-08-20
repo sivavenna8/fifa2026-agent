@@ -46,6 +46,9 @@ class Settings:
     telegram_token: str | None
     telegram_chat_id: str | None
     request_timeout: int
+    enable_league_scheduler: bool = False
+    bootstrap_league_data: bool = False
+    league_schedule_hours: tuple[int, ...] = (8, 20)
 
 
 def get_settings() -> Settings:
@@ -54,6 +57,8 @@ def get_settings() -> Settings:
     base_url = os.getenv("FOOTBALL_DATA_BASE_URL", DEFAULT_FOOTBALL_DATA_BASE_URL).rstrip("/")
     competition = os.getenv("FOOTBALL_DATA_COMPETITION", "WC").strip() or "WC"
     football_data_url = f"{base_url}/competitions/{quote(competition, safe='')}/matches"
+    schedule_hours=tuple(sorted({int(value.strip()) for value in os.getenv("LEAGUE_SCHEDULE_HOURS_UTC","8,20").split(",") if value.strip()}))
+    if not schedule_hours or any(hour<0 or hour>23 for hour in schedule_hours): raise ValueError("LEAGUE_SCHEDULE_HOURS_UTC must contain hours from 0 to 23")
     return Settings(
         database_path=Path(os.getenv("DATABASE_PATH", ROOT / "data" / "fifa2026.db")),
         strengths_path=Path(os.getenv("TEAM_STRENGTH_PATH", ROOT / "data" / "team_strength.json")),
@@ -65,4 +70,7 @@ def get_settings() -> Settings:
         telegram_token=os.getenv("TELEGRAM_BOT_TOKEN") or None,
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID") or None,
         request_timeout=int(os.getenv("REQUEST_TIMEOUT", "15")),
+        enable_league_scheduler=parse_bool(os.getenv("ENABLE_LEAGUE_SCHEDULER"),False),
+        bootstrap_league_data=parse_bool(os.getenv("BOOTSTRAP_LEAGUE_DATA"),False),
+        league_schedule_hours=schedule_hours,
     )

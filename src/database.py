@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -64,11 +64,23 @@ CREATE TABLE IF NOT EXISTS bracket_snapshots (
     change_summary TEXT,
     FOREIGN KEY(run_id) REFERENCES agent_runs(id)
 );
+CREATE TABLE IF NOT EXISTS leagues (code TEXT PRIMARY KEY, name TEXT NOT NULL, country TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS league_matches (id TEXT PRIMARY KEY, league_code TEXT NOT NULL, season TEXT, matchday INTEGER, kickoff TEXT, status TEXT NOT NULL, home_team_id TEXT, home_team TEXT NOT NULL, away_team_id TEXT, away_team TEXT NOT NULL, home_score INTEGER, away_score INTEGER, winner TEXT, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_league_matches_date ON league_matches(league_code, kickoff);
+CREATE TABLE IF NOT EXISTS league_standings (league_code TEXT NOT NULL, team_id TEXT NOT NULL, team TEXT NOT NULL, position INTEGER, played INTEGER, won INTEGER, drawn INTEGER, lost INTEGER, goal_difference INTEGER, points INTEGER, updated_at TEXT NOT NULL, PRIMARY KEY(league_code, team_id));
+CREATE TABLE IF NOT EXISTS league_predictions (id INTEGER PRIMARY KEY AUTOINCREMENT, match_id TEXT NOT NULL UNIQUE, league_code TEXT NOT NULL, model_name TEXT NOT NULL, model_version TEXT NOT NULL, created_at TEXT NOT NULL, locked_at TEXT NOT NULL DEFAULT '', home_probability REAL NOT NULL, draw_probability REAL NOT NULL, away_probability REAL NOT NULL, predicted_outcome TEXT NOT NULL, confidence TEXT NOT NULL, feature_json TEXT NOT NULL, actual_outcome TEXT, correct INTEGER, evaluated_at TEXT, prediction_status TEXT NOT NULL DEFAULT 'provisional', generated_at TEXT);
+CREATE TABLE IF NOT EXISTS team_ratings (league_code TEXT NOT NULL, team TEXT NOT NULL, rating REAL NOT NULL, as_of TEXT NOT NULL, PRIMARY KEY(league_code, team));
+CREATE TABLE IF NOT EXISTS model_metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, league_code TEXT NOT NULL, model_name TEXT NOT NULL, created_at TEXT NOT NULL, split_type TEXT NOT NULL, metrics_json TEXT NOT NULL);
 """
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def parse_utc(value: str) -> datetime:
+    parsed=datetime.fromisoformat(value.replace("Z","+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 class Database:
@@ -95,6 +107,24 @@ class Database:
     def initialize(self) -> None:
         with self.connect() as connection:
             connection.executescript(SCHEMA)
+            columns={row[1] for row in connection.execute("PRAGMA table_info(league_matches)")}
+            if "winner" not in columns:
+                connection.execute("ALTER TABLE league_matches ADD COLUMN winner TEXT")
+            prediction_columns={row[1] for row in connection.execute("PRAGMA table_info(league_predictions)")}
+            if "prediction_status" not in prediction_columns:
+                connection.execute("ALTER TABLE league_predictions ADD COLUMN prediction_status TEXT NOT NULL DEFAULT 'provisional'")
+            if "generated_at" not in prediction_columns:
+                connection.execute("ALTER TABLE league_predictions ADD COLUMN generated_at TEXT")
+            # One-time lifecycle migration: preserve evaluated rows, retain picks
+            # already inside 48h, and make the remaining legacy season-long
+            # locks refreshable provisional previews.
+            now=datetime.now(timezone.utc); cutoff=now+timedelta(hours=48)
+            legacy=connection.execute("""SELECT p.id,p.created_at,p.evaluated_at,m.kickoff FROM league_predictions p JOIN league_matches m ON m.id=p.match_id WHERE p.generated_at IS NULL""").fetchall()
+            for row in legacy:
+                kickoff=parse_utc(row["kickoff"]) if row["kickoff"] else now
+                status="evaluated" if row["evaluated_at"] else "locked" if kickoff<=cutoff else "provisional"
+                locked_at=row["created_at"] if status=="locked" else ""
+                connection.execute("UPDATE league_predictions SET prediction_status=?,generated_at=?,locked_at=? WHERE id=?",(status,row["created_at"],locked_at,row["id"]))
 
     def upsert_teams(self, strengths: dict[str, float]) -> None:
         now = utc_now()
@@ -207,3 +237,56 @@ class Database:
         for row in rows:
             row["bracket"] = json.loads(row.pop("bracket_json"))
         return rows
+
+    def upsert_league_matches(self, league: Any, matches: list[dict[str, Any]]) -> tuple[int, int]:
+        now = utc_now(); inserted = updated = 0
+        with self.connect() as c:
+            c.execute("INSERT INTO leagues VALUES(?,?,?,?) ON CONFLICT(code) DO UPDATE SET name=excluded.name,country=excluded.country,updated_at=excluded.updated_at", (league.code, league.name, league.country, now))
+            for m in matches:
+                old = c.execute("SELECT status FROM league_matches WHERE id=?", (m["id"],)).fetchone()
+                if old and old["status"] == "completed" and m["status"] != "completed": continue
+                c.execute("""INSERT INTO league_matches(id,league_code,season,matchday,kickoff,status,home_team_id,home_team,away_team_id,away_team,home_score,away_score,winner,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET season=excluded.season,matchday=excluded.matchday,kickoff=excluded.kickoff,status=excluded.status,home_team_id=excluded.home_team_id,home_team=excluded.home_team,away_team_id=excluded.away_team_id,away_team=excluded.away_team,home_score=excluded.home_score,away_score=excluded.away_score,winner=excluded.winner,updated_at=excluded.updated_at""", (m["id"],m["league_code"],m.get("season"),m.get("matchday"),m.get("kickoff"),m["status"],m.get("home_team_id"),m["home_team"],m.get("away_team_id"),m["away_team"],m.get("home_score"),m.get("away_score"),m.get("winner"),now))
+                inserted += old is None; updated += old is not None
+        return inserted, updated
+
+    def league_matches(self, code: str, date: str | None = None) -> list[dict[str, Any]]:
+        q = "SELECT m.*,p.home_probability,p.draw_probability,p.away_probability,p.predicted_outcome,p.confidence,p.correct,p.prediction_status,p.generated_at,p.locked_at,p.model_version FROM league_matches m LEFT JOIN league_predictions p ON p.match_id=m.id WHERE m.league_code=?"
+        params: tuple[Any,...] = (code,)
+        if date: q += " AND substr(m.kickoff,1,10)=?"; params += (date,)
+        return self.rows(q+" ORDER BY m.kickoff,m.id", params)
+
+    def save_league_prediction(self, match_id: str, code: str, probabilities: dict[str,float], features: list[float], model_name: str="logistic-regression", model_version: str="v2", lock_window_hours: int=48, now: datetime | None=None) -> str | None:
+        current=now or datetime.now(timezone.utc); now_text=current.isoformat(timespec="seconds"); pick=max(probabilities,key=probabilities.get); confidence="High" if probabilities[pick]>=.65 else "Medium" if probabilities[pick]>=.50 else "Low"
+        with self.connect() as c:
+            match=c.execute("SELECT kickoff,status FROM league_matches WHERE id=?",(match_id,)).fetchone()
+            if not match: raise ValueError("Unknown match")
+            kickoff=parse_utc(match["kickoff"]) if match["kickoff"] else None
+            if match["status"]=="completed" or not kickoff or kickoff<=current: return None
+            target="locked" if kickoff<=current+timedelta(hours=lock_window_hours) else "provisional"
+            existing=c.execute("SELECT prediction_status FROM league_predictions WHERE match_id=?",(match_id,)).fetchone()
+            if existing and existing["prediction_status"] in {"locked","evaluated"}: return None
+            locked_at=now_text if target=="locked" else ""
+            if existing:
+                c.execute("""UPDATE league_predictions SET model_name=?,model_version=?,generated_at=?,locked_at=?,home_probability=?,draw_probability=?,away_probability=?,predicted_outcome=?,confidence=?,feature_json=?,prediction_status=? WHERE match_id=? AND prediction_status='provisional'""",(model_name,model_version,now_text,locked_at,probabilities["H"],probabilities["D"],probabilities["A"],pick,confidence,json.dumps(features),target,match_id))
+            else:
+                c.execute("""INSERT INTO league_predictions(match_id,league_code,model_name,model_version,created_at,locked_at,home_probability,draw_probability,away_probability,predicted_outcome,confidence,feature_json,prediction_status,generated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(match_id,code,model_name,model_version,now_text,locked_at,probabilities["H"],probabilities["D"],probabilities["A"],pick,confidence,json.dumps(features),target,now_text))
+            return target
+
+    def lock_league_prediction(self, match_id: str, code: str, probabilities: dict[str,float], features: list[float], model_name: str="logistic-regression", model_version: str="v2") -> bool:
+        """Compatibility helper for callers explicitly requesting an official pick."""
+        return self.save_league_prediction(match_id,code,probabilities,features,model_name,model_version,lock_window_hours=10**6)=="locked"
+
+    def evaluate_league_predictions(self, code: str) -> int:
+        now=utc_now(); count=0
+        with self.connect() as c:
+            rows=c.execute("""SELECT p.id,p.predicted_outcome,m.home_score,m.away_score FROM league_predictions p JOIN league_matches m ON m.id=p.match_id WHERE p.league_code=? AND p.prediction_status='locked' AND p.evaluated_at IS NULL AND m.status='completed'""",(code,)).fetchall()
+            for r in rows:
+                actual="H" if r["home_score"]>r["away_score"] else "A" if r["home_score"]<r["away_score"] else "D"
+                c.execute("UPDATE league_predictions SET actual_outcome=?,correct=?,evaluated_at=?,prediction_status='evaluated' WHERE id=?",(actual,int(actual==r["predicted_outcome"]),now,r["id"])); count+=1
+        return count
+
+    def league_metrics(self, code: str) -> dict[str, Any]:
+        rows=self.rows("SELECT * FROM league_predictions WHERE league_code=? AND prediction_status='evaluated' AND evaluated_at IS NOT NULL ORDER BY evaluated_at",(code,)); total=len(rows); correct=sum(r["correct"] for r in rows)
+        by={o:[r for r in rows if r["predicted_outcome"]==o] for o in "HDA"}; high=[r for r in rows if r["confidence"]=="High"]; last=rows[-10:]
+        rate=lambda rs: (sum(r["correct"] for r in rs)/len(rs) if rs else None)
+        return {"total":total,"correct":correct,"accuracy":rate(rows),"home_accuracy":rate(by["H"]),"draw_accuracy":rate(by["D"]),"away_accuracy":rate(by["A"]),"high_confidence_accuracy":rate(high),"last_10_correct":sum(r["correct"] for r in last),"last_10_total":len(last)}

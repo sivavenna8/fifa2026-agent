@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#071512"><meta name="description" content="Premier League predictions powered by football data, machine learning and autonomous agents.">
+  <title>SportsIntelAI — {{ league.name }} Predictions</title>
+  <link rel="stylesheet" href="/static/league.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="brand" href="/"><span class="brand-ball">SI</span><span>SportsIntel<strong>AI</strong><small>Football intelligence platform</small></span></a>
+  <div class="agent-state"><i></i><span>Agent Active<small>Last updated {{ last_updated[:16].replace('T',' · ') if last_updated else 'awaiting first run' }} UTC</small></span></div>
+</header>
+<main>
+  <section class="product-bar">
+    <div><p class="eyebrow">Football predictions powered by data, machine learning and autonomous agents.</p><label>Competition<select aria-label="League selector" onchange="location='/?league='+this.value+'&date={{selected_date}}'">{% for item in leagues %}<option value="{{item.code}}" {{'selected' if item.code==league.code else ''}}>{{item.name}}</option>{% endfor %}</select></label></div>
+    <a class="archive-link" href="/fifa-2026">FIFA 2026 Archive <span>→</span></a>
+  </section>
+
+  <nav class="primary-nav" aria-label="Primary"><a href="#predictions">Predictions</a><a href="#table">Table</a><a href="#performance">Performance</a></nav>
+
+  <section class="date-panel">
+    <div class="date-main"><a href="?league={{league.code}}&date={{previous_date}}" aria-label="Previous date">← <span>{{previous_date[8:]}} {{previous_date[5:7]}}</span></a><strong><small>{{'TODAY · ' if selected_date==today else ''}}</small>{{display_date}}</strong><a href="?league={{league.code}}&date={{next_date}}" aria-label="Next date"><span>{{next_date[8:]}} {{next_date[5:7]}}</span> →</a></div>
+    <div class="date-tools"><div class="quick-dates"><a href="?league={{league.code}}&date={{yesterday}}">Yesterday</a><a class="{{'active' if selected_date==today else ''}}" href="?league={{league.code}}&date={{today}}">Today</a><a href="?league={{league.code}}&date={{tomorrow}}">Tomorrow</a></div><input aria-label="Choose date" type="date" value="{{selected_date}}" onchange="location='?league={{league.code}}&date='+this.value"></div>
+  </section>
+
+  <section id="predictions" class="section-block">
+    <div class="section-title"><div><p class="eyebrow">{{league.name}}</p><h1>Match predictions</h1></div><span>{{matches|length}} match{{'' if matches|length==1 else 'es'}}</span></div>
+    {% if not matches %}<div class="empty"><span>○</span><h2>No Premier League matches on this date.</h2><p>Browse another date or jump to the next scheduled matchday.</p>{% if next_matchday %}<a class="button" href="?league={{league.code}}&date={{next_matchday}}">Next matchday · {{next_matchday}}</a>{% endif %}</div>{% endif %}
+    <div class="match-grid">{% for m in matches %}
+      <article class="match-card {{m.prediction_status or m.status}}">
+        <div class="card-top"><span class="status-badge">{% if m.prediction_status=='provisional' %}◌ Provisional{% elif m.prediction_status=='locked' %}🔒 Locked · Official Agent Pick{% elif m.prediction_status=='evaluated' %}Full time{% elif m.status=='live' %}Live{% else %}{{m.status|title}}{% endif %}</span><time>{{m.kickoff_uk or 'Kickoff TBD'}}</time></div>
+        <div class="fixture"><div><small>HOME</small><strong>{{m.home_team.replace(' FC','')}}</strong></div><b>{% if m.status=='completed' %}{{m.home_score}}–{{m.away_score}}{% else %}<span>vs</span>{% endif %}</b><div><small>AWAY</small><strong>{{m.away_team.replace(' FC','')}}</strong></div></div>
+        {% if m.home_probability is not none %}
+        <div class="probability-bar" aria-label="Home {{'%.1f'|format(m.home_probability*100)}} percent, draw {{'%.1f'|format(m.draw_probability*100)}} percent, away {{'%.1f'|format(m.away_probability*100)}} percent"><i class="home" style="width:{{m.home_probability*100}}%"></i><i class="draw" style="width:{{m.draw_probability*100}}%"></i><i class="away" style="width:{{m.away_probability*100}}%"></i></div>
+        <div class="probabilities"><div><small>HOME</small><strong>{{'%.1f'|format(m.home_probability*100)}}%</strong></div><div><small>DRAW</small><strong>{{'%.1f'|format(m.draw_probability*100)}}%</strong></div><div><small>AWAY</small><strong>{{'%.1f'|format(m.away_probability*100)}}%</strong></div></div>
+        <div class="pick"><div><small>{{'Provisional Prediction' if m.prediction_status=='provisional' else 'Official Pick'}}</small><strong>{{m.home_team.replace(' FC','') if m.predicted_outcome=='H' else m.away_team.replace(' FC','') if m.predicted_outcome=='A' else 'Draw'}}</strong></div><span>{{m.confidence}} confidence</span>{% if m.correct is not none %}<b class="{{'correct' if m.correct else 'incorrect'}}">{{'✓ Correct' if m.correct else '✕ Incorrect'}}</b>{% endif %}</div>
+        {% if m.prediction_status=='provisional' %}<p class="provisional-note">Updates as new results change team form and Elo ratings.</p>{% endif %}
+        {% else %}<div class="pending">Prediction pending the next agent cycle.</div>{% endif %}
+      </article>{% endfor %}</div>
+  </section>
+
+  <section id="performance" class="section-block performance-section">
+    <div class="section-title"><div><p class="eyebrow">Auditable results</p><h2>Model performance</h2></div></div>
+    <h3>Live 2026–27 Performance</h3><p class="section-copy">Only completed official picks count here. Provisional previews and historical tests are excluded.</p>
+    <div class="metric-grid"><article><small>Official predictions completed</small><strong>{{metrics.total}}</strong></article><article><small>Correct</small><strong>{{metrics.correct}}</strong></article><article><small>Incorrect</small><strong>{{metrics.total-metrics.correct}}</strong></article><article><small>Accuracy</small><strong>{{'%.1f%%'|format(metrics.accuracy*100) if metrics.accuracy is not none else '—'}}</strong></article><article><small>High-confidence accuracy</small><strong>{{'%.1f%%'|format(metrics.high_confidence_accuracy*100) if metrics.high_confidence_accuracy is not none else '—'}}</strong></article><article><small>Last 10 official picks</small><strong>{{metrics.last_10_correct}} / {{metrics.last_10_total}}</strong></article></div>
+    {% if backtest %}{% set test=backtest.metrics.models[backtest.model_name].test %}<div class="backtest"><div><p class="eyebrow">Historical backtest — not live season performance</p><h3>Historical Model Evaluation</h3></div><dl><div><dt>Production model</dt><dd>{{backtest.model_name.replace('-',' ')|title}}</dd></div><div><dt>Historical training matches</dt><dd>{{backtest.metrics.samples}}</dd></div><div><dt>Held-out test matches</dt><dd>{{backtest.metrics.test_size}}</dd></div><div><dt>Test accuracy</dt><dd>{{'%.2f%%'|format(test.accuracy*100)}}</dd></div><div><dt>Test log loss</dt><dd>{{'%.4f'|format(test.log_loss)}}</dd></div></dl></div>{% endif %}
+    <details class="model-explainer"><summary>How does SportsIntelAI predict matches?<span>+</span></summary><div><p>The agent builds a pre-match view of each team using Elo strength, recent form, goals scored and conceded, home/away performance, rest difference and match context.</p><p>A multiclass machine-learning model estimates Home, Draw and Away probabilities. Predictions remain provisional until 48 hours before kickoff. Once locked, the official prediction cannot be changed.</p></div></details>
+  </section>
+
+  <section id="table" class="section-block"><div class="section-title"><div><p class="eyebrow">Official standings</p><h2>Premier League table</h2></div></div>{% if standings %}<div class="league-table"><div class="table-row table-head"><span>Pos</span><span>Team</span><span>P</span><span>W</span><span>D</span><span>L</span><span>GD</span><span>Pts</span></div>{% for r in standings %}<div class="table-row"><strong>{{r.position}}</strong><b>{{r.team.replace(' FC','')}}</b><span>{{r.played}}</span><span>{{r.won}}</span><span>{{r.drawn}}</span><span>{{r.lost}}</span><span>{{r.goal_difference}}</span><strong>{{r.points}}</strong></div>{% endfor %}</div>{% else %}<div class="empty"><h2>Standings are awaiting the next data refresh.</h2></div>{% endif %}</section>
+
+  <footer><div><strong>SportsIntelAI</strong><p>Built as an autonomous sports intelligence experiment combining live football data, machine learning, stateful prediction tracking and automated agents.</p></div><nav><a href="https://github.com/sivavenna8/fifa2026-agent" rel="noreferrer">View on GitHub ↗</a><a href="/fifa-2026">FIFA 2026 Prediction Archive</a></nav></footer>
+</main>
+</body></html>

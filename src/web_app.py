@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import logging
+import json
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
+from datetime import date as date_type, timedelta
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .config import get_settings
 from .database import Database
 from .message_builder import build_message
+from .league_config import LEAGUES, get_league
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -81,18 +85,28 @@ def _dashboard_data(db: Database) -> dict[str, Any]:
 
 def create_app(database_path: Path) -> FastAPI:
     db = Database(database_path)
+    settings=get_settings()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        _bootstrap_dashboard(db)
+        try:
+            _bootstrap_dashboard(db)
+        except Exception:
+            LOGGER.exception("FIFA archive bootstrap failed; league dashboard will remain available")
+        if settings.bootstrap_league_data:
+            from .league_service import bootstrap_league
+            bootstrap_league(db,"PL")
+        if settings.enable_league_scheduler:
+            from .scheduler import start_league_scheduler
+            start_league_scheduler(database_path,settings.league_schedule_hours,"PL")
         yield
 
-    app = FastAPI(title="FIFA2026 Dynamic Bracket Agent", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="SportsIntelAI", version="2.1.0", lifespan=lifespan)
     templates = Jinja2Templates(directory=ROOT / "templates")
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
-    @app.get("/", response_class=HTMLResponse)
-    def dashboard(request: Request) -> HTMLResponse:
+    @app.get("/fifa-2026", response_class=HTMLResponse)
+    def fifa_archive(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(
             request=request,
             name="dashboard.html",
@@ -105,9 +119,35 @@ def create_app(database_path: Path) -> FastAPI:
         data.pop("eliminated_set", None)
         return data
 
+    @app.get("/", response_class=HTMLResponse)
+    @app.get("/league", response_class=HTMLResponse)
+    def league_dashboard(request: Request, league: str="PL", date: str | None=None) -> HTMLResponse:
+        selected=date or date_type.today().isoformat(); selected_day=date_type.fromisoformat(selected); config=get_league(league)
+        matches=db.league_matches(config.code,selected); london=ZoneInfo("Europe/London")
+        for match in matches:
+            if match.get("kickoff"):
+                kickoff=__import__("datetime").datetime.fromisoformat(match["kickoff"].replace("Z","+00:00")).astimezone(london)
+                match["kickoff_uk"]=kickoff.strftime("%d %b · %H:%M UK").upper()
+        standings=db.rows("SELECT * FROM league_standings WHERE league_code=? ORDER BY position",(config.code,))
+        backtests=db.rows("SELECT * FROM model_metrics WHERE league_code=? ORDER BY id DESC LIMIT 1",(config.code,))
+        if backtests:
+            backtests[0]["metrics"]=json.loads(backtests[0]["metrics_json"])
+        next_rows=db.rows("SELECT substr(kickoff,1,10) match_date FROM league_matches WHERE league_code=? AND substr(kickoff,1,10)>? GROUP BY match_date ORDER BY match_date LIMIT 1",(config.code,selected))
+        updated=db.rows("SELECT MAX(updated_at) updated_at FROM league_matches WHERE league_code=?",(config.code,))
+        return templates.TemplateResponse(request=request,name="league_dashboard.html",context={"league":config,"leagues":[item for item in LEAGUES.values() if item.enabled],"selected_date":selected,"display_date":selected_day.strftime("%d %b %Y").upper(),"previous_date":(selected_day-timedelta(days=1)).isoformat(),"next_date":(selected_day+timedelta(days=1)).isoformat(),"today":date_type.today().isoformat(),"yesterday":(date_type.today()-timedelta(days=1)).isoformat(),"tomorrow":(date_type.today()+timedelta(days=1)).isoformat(),"next_matchday":next_rows[0]["match_date"] if next_rows else None,"matches":matches,"standings":standings,"metrics":db.league_metrics(config.code),"backtest":backtests[0] if backtests else None,"last_updated":updated[0]["updated_at"] if updated else None})
+
+    @app.get("/api/leagues/{league}/matches")
+    def league_matches(league: str, date: str | None=None): return {"league":league.upper(),"date":date,"matches":db.league_matches(league.upper(),date)}
+
+    @app.get("/api/leagues/{league}/standings")
+    def league_standings(league: str): return {"standings":db.rows("SELECT * FROM league_standings WHERE league_code=? ORDER BY position",(league.upper(),))}
+
+    @app.get("/api/leagues/{league}/performance")
+    def league_performance(league: str): return db.league_metrics(league.upper())
+
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok"}
+        return {"status": "ok","service":"sportsintelai"}
 
     return app
 

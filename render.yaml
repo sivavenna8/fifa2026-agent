@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: fifa2026-bracket-agent
+    name: sportsintelai
     runtime: python
     plan: starter
     buildCommand: pip install -r requirements.txt
@@ -17,6 +17,18 @@ services:
         value: WC
       - key: DATABASE_PATH
         value: /var/data/fifa2026.db
+      - key: MODEL_PATH
+        value: models/pl_model.pkl
+      - key: BOOTSTRAP_LEAGUE_DATA
+        value: "true"
+      - key: ENABLE_LEAGUE_SCHEDULER
+        value: "true"
+      - key: LEAGUE_SCHEDULE_HOURS_UTC
+        value: "8,20"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
     disk:
       name: fifa2026-data
       mountPath: /var/data
