@@ -55,8 +55,46 @@ class LiveConfigurationTests(unittest.TestCase):
     def test_boolean_parser_rejects_ambiguous_values(self) -> None:
         self.assertFalse(parse_bool("false"))
         self.assertTrue(parse_bool("TRUE"))
+        self.assertTrue(parse_bool("   ", default=True))
         with self.assertRaises(ValueError):
             parse_bool("sometimes")
+
+    def test_blank_environment_values_use_defaults(self) -> None:
+        environment = {
+            "REQUEST_TIMEOUT": "   ",
+            "USE_SAMPLE_DATA": "",
+            "ENABLE_LEAGUE_SCHEDULER": " ",
+            "BOOTSTRAP_LEAGUE_DATA": "\t",
+            "LEAGUE_SCHEDULE_HOURS_UTC": "  ",
+            "FOOTBALL_DATA_BASE_URL": "",
+            "FOOTBALL_DATA_COMPETITION": " ",
+            "DATABASE_PATH": "",
+            "TEAM_STRENGTH_PATH": " ",
+            "FIXTURES_PATH": "\t",
+            "DATABASE_URL": " ",
+            "TELEGRAM_BOT_TOKEN": "",
+        }
+        with patch.dict(os.environ, environment, clear=True), patch("src.config.load_env"):
+            settings = get_settings()
+        self.assertEqual(settings.request_timeout, 15)
+        self.assertTrue(settings.use_sample_data)
+        self.assertFalse(settings.enable_league_scheduler)
+        self.assertFalse(settings.bootstrap_league_data)
+        self.assertEqual(settings.league_schedule_hours, (8, 20))
+        self.assertEqual(settings.football_data_competition, "WC")
+        self.assertEqual(settings.database_path.name, "fifa2026.db")
+        self.assertIsNone(settings.database_url)
+        self.assertIsNone(settings.telegram_token)
+
+    def test_invalid_non_empty_numeric_and_schedule_values_raise_clear_errors(self) -> None:
+        with patch.dict(os.environ, {"REQUEST_TIMEOUT": "soon"}, clear=True), patch("src.config.load_env"):
+            with self.assertRaisesRegex(ValueError, "REQUEST_TIMEOUT must be an integer"):
+                get_settings()
+        with patch.dict(
+            os.environ, {"LEAGUE_SCHEDULE_HOURS_UTC": "8,noon"}, clear=True
+        ), patch("src.config.load_env"):
+            with self.assertRaisesRegex(ValueError, "comma-separated integer hours"):
+                get_settings()
 
     def test_runtime_environment_secret_overrides_dotenv_value(self) -> None:
         env_file = Mock()
