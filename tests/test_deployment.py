@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from api.index import app
+from app import app
 from scripts.migrate_sqlite_to_postgres import TABLES
 from src.database import POSTGRES_SCHEMA, Database, _PostgresConnection
 from src.league_model import LeagueModel
@@ -18,7 +18,19 @@ ROOT = Path(__file__).resolve().parent.parent
 class DeploymentTests(unittest.TestCase):
     def test_vercel_entrypoint_exports_fastapi_app(self):
         self.assertIsInstance(app, FastAPI)
-        self.assertTrue(any(route.path == "/league" for route in app.routes))
+        registered_paths = {route.path for route in app.routes}
+        self.assertTrue(
+            {
+                "/",
+                "/league",
+                "/fifa-2026",
+                "/health",
+                "/api/leagues/{league}/matches",
+                "/api/leagues/{league}/standings",
+                "/api/leagues/{league}/performance",
+                "/static",
+            }.issubset(registered_paths)
+        )
 
     def test_committed_production_model_loads(self):
         model = LeagueModel.load(ROOT / "models" / "pl_model.pkl")
@@ -26,8 +38,10 @@ class DeploymentTests(unittest.TestCase):
 
     def test_vercel_configuration_is_valid_and_routes_to_entrypoint(self):
         config = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
-        self.assertEqual(config["rewrites"][0]["destination"], "/api/index")
-        self.assertIn("models/**", config["functions"]["api/index.py"]["includeFiles"])
+        self.assertNotIn("rewrites", config)
+        self.assertIn("models/**", config["functions"]["app.py"]["includeFiles"])
+        self.assertIn("templates/**", config["functions"]["app.py"]["includeFiles"])
+        self.assertIn("static/**", config["functions"]["app.py"]["includeFiles"])
 
     def test_postgres_adapter_translates_placeholders(self):
         self.assertEqual(
