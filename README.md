@@ -36,7 +36,7 @@ python main.py web                    # V2 at /; FIFA archive at /fifa-2026
 
 Set `FOOTBALL_DATA_API_KEY` in `.env`; do not commit it. Historical availability depends on the football-data.org subscription. The project never fabricates matches: if fewer than 12 completed matches covering all outcomes are stored, training stops with an honest error. A future CSV adapter can feed the same normalized `league_matches` interface.
 
-Public read-only endpoints are `/api/leagues/PL/matches?date=YYYY-MM-DD`, `/standings`, and `/performance`. The existing Render/FastAPI deployment remains the simplest reliable architecture and keeps secrets server-side. Vercel can host a separate static consumer later, but persistent SQLite and scheduled Python inference should remain on Render (or another persistent Python host).
+Public read-only endpoints are `/api/leagues/PL/matches?date=YYYY-MM-DD`, `/standings`, and `/performance`. Production uses the same FastAPI application on Vercel, Supabase Postgres for durable state, and GitHub Actions for scheduled agent work. Local development continues to use SQLite automatically when `DATABASE_URL` is absent.
 
 ### Limitations
 
@@ -57,7 +57,7 @@ The included fixture file is **illustrative demo data**, not an official 2026 fe
 
 ## Quick start
 
-Requires Python 3.10 or later. No third-party packages are required.
+Requires Python 3.10 or later.
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -143,33 +143,32 @@ python D:\fifa2026\main.py daily
 
 Set the task's working directory to `D:\fifa2026`.
 
-## Production architecture: Render + persistent SQLite
+## Production architecture: Vercel + Supabase + GitHub Actions
 
-The repository includes a Render Blueprint at `render.yaml`. It uses this production command:
+Vercel serves `api/index.py` as a stateless FastAPI function. Jinja templates, static assets, the committed model artifact, and non-secret JSON resources are bundled through `vercel.json`. Vercel cold starts do not bootstrap data or run the in-process scheduler; public routes only read durable state from Supabase.
 
-```text
-uvicorn src.web_app:app --host 0.0.0.0 --port $PORT
-```
-
-Vercel can run FastAPI, but an application-owned SQLite file is not a reliable serverless persistence layer. SportsIntelAI therefore uses one Render Starter web service with one encrypted 1 GB persistent disk. This is intentionally not a free ephemeral deployment: official picks and evaluated history must survive restarts and deploys.
-
-The same single service runs an opt-in scheduler at 08:00 and 20:00 UTC. It calls the V2 daily workflow against the mounted database without depending on site traffic. Render cron jobs and one-off jobs cannot access a web service's persistent disk, so they are not used for V2 updates. The existing GitHub Action remains dedicated to the FIFA/Telegram workflow.
+Supabase Postgres is the production system of record. The database adapter selects Postgres when `DATABASE_URL` exists and otherwise retains the existing local SQLite behavior. Postgres connections are short-lived and prepared statements are disabled, which makes the Supabase transaction pooler appropriate for Vercel and GitHub Actions.
 
 Deployment steps:
 
-1. Push the project to a GitHub, GitLab, or Bitbucket repository.
-2. In Render, choose **New → Blueprint** and select the repository.
-3. When prompted for `FOOTBALL_DATA_API_KEY`, enter the football-data.org token. It is configured with `sync: false`, so the secret is stored by Render and is not committed to the repository.
-4. Optionally provide `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; leave them blank to disable Telegram delivery.
-5. Apply the Blueprint. On a brand-new disk, startup imports real PL history once, persists backtest metadata from the committed model artifact, and creates the first lifecycle-aware predictions.
-6. Wait for `/health` to return `{"status":"ok","service":"sportsintelai"}`.
-7. Open and verify the generated `onrender.com` URL.
+1. Create a Supabase project and copy its database connection string. Use a direct or session-pooler connection for the one-time migration; use the transaction-pooler string (normally port 6543) for Vercel and the scheduled workflow.
+2. Set `DATABASE_URL` locally without committing it, then migrate the current SQLite state idempotently:
 
-The Blueprint mounts a 1 GB persistent disk at `/var/data` and sets `DATABASE_PATH=/var/data/fifa2026.db`. Never remove the disk in production: free ephemeral hosting would destroy official prediction state.
+   ```powershell
+   $env:DATABASE_URL="postgresql://..."
+   python main.py migrate-db --source-database data/fifa2026.db
+   ```
 
-Runtime environment variables take precedence over local `.env` values. Required production names are `FOOTBALL_DATA_API_KEY`, `FOOTBALL_DATA_BASE_URL`, `FOOTBALL_DATA_COMPETITION`, `DATABASE_PATH`, `MODEL_PATH`, `BOOTSTRAP_LEAGUE_DATA`, `ENABLE_LEAGUE_SCHEDULER`, and `LEAGUE_SCHEDULE_HOURS_UTC`; Telegram variables are optional. Never add secret values to source control.
+   The command copies every V1 and V2 table, preserves primary keys, prediction statuses, timestamps, evaluated results, model versions, snapshots, and run history, and reports source/inserted/target counts. It can be rerun safely.
+3. Add Vercel environment variable `DATABASE_URL` using the Supabase transaction-pooler URL. Do not set `ENABLE_LEAGUE_SCHEDULER` or `BOOTSTRAP_LEAGUE_DATA` on Vercel.
+4. Import the Git repository into Vercel and deploy. `vercel.json` routes all requests to FastAPI.
+5. Add GitHub repository secrets `DATABASE_URL` and `FOOTBALL_DATA_API_KEY`. Optionally add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+6. Run the **SportsIntelAI League Agent** workflow manually once. It then runs `python main.py league-daily PL` at 08:00 and 20:00 UTC, with overlapping runs prevented by workflow concurrency.
+7. Verify `/health` reports `status: ok` and `database: connected`, then check `/`, `/league`, and `/fifa-2026`.
 
-## SQLite model
+The football-data.org key is needed only by GitHub Actions/CLI ingestion, not by public page requests. Never commit Supabase credentials or API tokens. The existing `render.yaml` remains as an optional alternative deployment path, not the primary architecture.
+
+## Database model
 
 - `teams`: strength, qualification, and elimination state.
 - `matches`: actual/confirmed fixtures plus source-match links.

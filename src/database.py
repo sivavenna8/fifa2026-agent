@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -73,6 +74,21 @@ CREATE TABLE IF NOT EXISTS team_ratings (league_code TEXT NOT NULL, team TEXT NO
 CREATE TABLE IF NOT EXISTS model_metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, league_code TEXT NOT NULL, model_name TEXT NOT NULL, created_at TEXT NOT NULL, split_type TEXT NOT NULL, metrics_json TEXT NOT NULL);
 """
 
+POSTGRES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS teams (name TEXT PRIMARY KEY, base_strength DOUBLE PRECISION NOT NULL DEFAULT 50, qualified INTEGER NOT NULL DEFAULT 1, eliminated INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS matches (id TEXT PRIMARY KEY, stage TEXT NOT NULL, match_number INTEGER NOT NULL DEFAULT 0, kickoff TEXT, status TEXT NOT NULL, home_team TEXT, away_team TEXT, home_score INTEGER, away_score INTEGER, home_penalties INTEGER, away_penalties INTEGER, winner_team TEXT, home_source_match TEXT, away_source_match TEXT, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS agent_runs (id BIGSERIAL PRIMARY KEY, started_at TEXT NOT NULL, completed_at TEXT, command TEXT NOT NULL, status TEXT NOT NULL, details TEXT);
+CREATE TABLE IF NOT EXISTS predictions (id BIGSERIAL PRIMARY KEY, run_id BIGINT NOT NULL REFERENCES agent_runs(id), match_id TEXT NOT NULL, stage TEXT NOT NULL, home_team TEXT, away_team TEXT, predicted_winner TEXT, home_score DOUBLE PRECISION, away_score DOUBLE PRECISION, basis TEXT NOT NULL, UNIQUE(run_id, match_id));
+CREATE TABLE IF NOT EXISTS bracket_snapshots (id BIGSERIAL PRIMARY KEY, run_id BIGINT NOT NULL UNIQUE REFERENCES agent_runs(id), created_at TEXT NOT NULL, predicted_winner TEXT, bracket_json TEXT NOT NULL, change_summary TEXT);
+CREATE TABLE IF NOT EXISTS leagues (code TEXT PRIMARY KEY, name TEXT NOT NULL, country TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS league_matches (id TEXT PRIMARY KEY, league_code TEXT NOT NULL, season TEXT, matchday INTEGER, kickoff TEXT, status TEXT NOT NULL, home_team_id TEXT, home_team TEXT NOT NULL, away_team_id TEXT, away_team TEXT NOT NULL, home_score INTEGER, away_score INTEGER, winner TEXT, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_league_matches_date ON league_matches(league_code, kickoff);
+CREATE TABLE IF NOT EXISTS league_standings (league_code TEXT NOT NULL, team_id TEXT NOT NULL, team TEXT NOT NULL, position INTEGER, played INTEGER, won INTEGER, drawn INTEGER, lost INTEGER, goal_difference INTEGER, points INTEGER, updated_at TEXT NOT NULL, PRIMARY KEY(league_code, team_id));
+CREATE TABLE IF NOT EXISTS league_predictions (id BIGSERIAL PRIMARY KEY, match_id TEXT NOT NULL UNIQUE, league_code TEXT NOT NULL, model_name TEXT NOT NULL, model_version TEXT NOT NULL, created_at TEXT NOT NULL, locked_at TEXT NOT NULL DEFAULT '', home_probability DOUBLE PRECISION NOT NULL, draw_probability DOUBLE PRECISION NOT NULL, away_probability DOUBLE PRECISION NOT NULL, predicted_outcome TEXT NOT NULL, confidence TEXT NOT NULL, feature_json TEXT NOT NULL, actual_outcome TEXT, correct INTEGER, evaluated_at TEXT, prediction_status TEXT NOT NULL DEFAULT 'provisional', generated_at TEXT);
+CREATE TABLE IF NOT EXISTS team_ratings (league_code TEXT NOT NULL, team TEXT NOT NULL, rating DOUBLE PRECISION NOT NULL, as_of TEXT NOT NULL, PRIMARY KEY(league_code, team));
+CREATE TABLE IF NOT EXISTS model_metrics (id BIGSERIAL PRIMARY KEY, league_code TEXT NOT NULL, model_name TEXT NOT NULL, created_at TEXT NOT NULL, split_type TEXT NOT NULL, metrics_json TEXT NOT NULL);
+"""
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -83,38 +99,69 @@ def parse_utc(value: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+class _PostgresConnection:
+    def __init__(self, raw: Any):
+        self.raw = raw
+
+    @staticmethod
+    def _sql(query: str) -> str:
+        return query.replace("?", "%s")
+
+    def execute(self, query: str, params: tuple[Any, ...] = ()):
+        return self.raw.execute(self._sql(query), params)
+
+    def executemany(self, query: str, params: Any):
+        return self.raw.cursor().executemany(self._sql(query), params)
+
+
 class Database:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, database_url: str | None = None, initialize_schema: bool = True):
         self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.initialize()
+        self.database_url = database_url or os.getenv("DATABASE_URL") or None
+        self.backend = "postgres" if self.database_url else "sqlite"
+        if self.backend == "sqlite":
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        if initialize_schema:
+            self.initialize()
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path, timeout=10)
-        connection.row_factory = sqlite3.Row
-        # MEMORY avoids fragile journal-file rename/locking behaviour in restricted
-        # Windows demo environments. Transactions still protect each operation.
-        connection.execute("PRAGMA journal_mode = MEMORY")
-        connection.execute("PRAGMA temp_store = MEMORY")
-        connection.execute("PRAGMA foreign_keys = ON")
+    def connect(self) -> Iterator[Any]:
+        if self.backend=="postgres":
+            try:
+                import psycopg
+                from psycopg.rows import dict_row
+            except ImportError as exc: raise RuntimeError("Postgres requires psycopg[binary]") from exc
+            raw=psycopg.connect(self.database_url,row_factory=dict_row,prepare_threshold=None)
+            connection: Any=_PostgresConnection(raw)
+        else:
+            raw=sqlite3.connect(self.path,timeout=10); raw.row_factory=sqlite3.Row
+            raw.execute("PRAGMA journal_mode = MEMORY"); raw.execute("PRAGMA temp_store = MEMORY"); raw.execute("PRAGMA foreign_keys = ON")
+            connection=raw
         try:
             yield connection
-            connection.commit()
+            raw.commit()
+        except Exception:
+            raw.rollback()
+            raise
         finally:
-            connection.close()
+            raw.close()
 
     def initialize(self) -> None:
         with self.connect() as connection:
-            connection.executescript(SCHEMA)
-            columns={row[1] for row in connection.execute("PRAGMA table_info(league_matches)")}
-            if "winner" not in columns:
-                connection.execute("ALTER TABLE league_matches ADD COLUMN winner TEXT")
-            prediction_columns={row[1] for row in connection.execute("PRAGMA table_info(league_predictions)")}
-            if "prediction_status" not in prediction_columns:
-                connection.execute("ALTER TABLE league_predictions ADD COLUMN prediction_status TEXT NOT NULL DEFAULT 'provisional'")
-            if "generated_at" not in prediction_columns:
-                connection.execute("ALTER TABLE league_predictions ADD COLUMN generated_at TEXT")
+            if self.backend=="postgres":
+                for statement in POSTGRES_SCHEMA.split(";"):
+                    if statement.strip(): connection.execute(statement)
+                connection.execute("ALTER TABLE league_matches ADD COLUMN IF NOT EXISTS winner TEXT")
+                connection.execute("ALTER TABLE league_predictions ADD COLUMN IF NOT EXISTS prediction_status TEXT NOT NULL DEFAULT 'provisional'")
+                connection.execute("ALTER TABLE league_predictions ADD COLUMN IF NOT EXISTS generated_at TEXT")
+            else:
+                connection.executescript(SCHEMA)
+            if self.backend=="sqlite":
+                columns={row[1] for row in connection.execute("PRAGMA table_info(league_matches)")}
+                if "winner" not in columns: connection.execute("ALTER TABLE league_matches ADD COLUMN winner TEXT")
+                prediction_columns={row[1] for row in connection.execute("PRAGMA table_info(league_predictions)")}
+                if "prediction_status" not in prediction_columns: connection.execute("ALTER TABLE league_predictions ADD COLUMN prediction_status TEXT NOT NULL DEFAULT 'provisional'")
+                if "generated_at" not in prediction_columns: connection.execute("ALTER TABLE league_predictions ADD COLUMN generated_at TEXT")
             # One-time lifecycle migration: preserve evaluated rows, retain picks
             # already inside 48h, and make the remaining legacy season-long
             # locks refreshable provisional previews.
@@ -165,7 +212,7 @@ class Database:
                 for team in (match.get("home_team"), match.get("away_team")):
                     if team:
                         connection.execute(
-                            "INSERT OR IGNORE INTO teams(name, base_strength, updated_at) VALUES (?, 50, ?)",
+                            "INSERT INTO teams(name, base_strength, updated_at) VALUES (?, 50, ?) ON CONFLICT(name) DO NOTHING",
                             (team, now),
                         )
         return inserted, updated
@@ -201,9 +248,10 @@ class Database:
 
     def start_run(self, command: str) -> int:
         with self.connect() as connection:
-            cursor = connection.execute(
-                "INSERT INTO agent_runs(started_at, command, status) VALUES (?, ?, 'running')", (utc_now(), command)
-            )
+            if self.backend=="postgres":
+                row=connection.execute("INSERT INTO agent_runs(started_at, command, status) VALUES (?, ?, 'running') RETURNING id",(utc_now(),command)).fetchone()
+                return int(row["id"])
+            cursor=connection.execute("INSERT INTO agent_runs(started_at, command, status) VALUES (?, ?, 'running')",(utc_now(),command))
             return int(cursor.lastrowid)
 
     def finish_run(self, run_id: int, status: str, details: str = "") -> None:

@@ -1,0 +1,40 @@
+name: SportsIntelAI League Agent
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8,20 * * *"
+
+concurrency:
+  group: sportsintel-league-agent
+  cancel-in-progress: false
+
+jobs:
+  league-daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+      FOOTBALL_DATA_BASE_URL: https://api.football-data.org/v4
+      FOOTBALL_DATA_COMPETITION: WC
+      USE_SAMPLE_DATA: "false"
+      MODEL_PATH: models/pl_model.pkl
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Premier League daily agent
+        run: python main.py league-daily PL

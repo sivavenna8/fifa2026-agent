@@ -18,7 +18,7 @@ def _next_run(hours: tuple[int,...]) -> datetime:
     return min(future) if future else min(candidates)+timedelta(days=1)
 
 
-def start_league_scheduler(database_path: Path, hours: tuple[int,...]=(8,20), league: str="PL") -> threading.Thread:
+def start_league_scheduler(database_path: Path, hours: tuple[int,...]=(8,20), league: str="PL", database_url: str | None=None) -> threading.Thread:
     """Run the stateful daily agent inside the single disk-backed web service."""
     def worker() -> None:
         while True:
@@ -26,7 +26,7 @@ def start_league_scheduler(database_path: Path, hours: tuple[int,...]=(8,20), le
             LOGGER.info("Next %s daily agent run scheduled for %s",league,target.isoformat())
             if threading.Event().wait(delay): return
             try:
-                result=daily_league(Database(database_path),league)
+                result=daily_league(Database(database_path,database_url),league)
                 LOGGER.info("Scheduled %s agent completed: %s",league,result)
             except Exception:
                 LOGGER.exception("Scheduled %s agent failed",league)

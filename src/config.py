@@ -49,6 +49,7 @@ class Settings:
     enable_league_scheduler: bool = False
     bootstrap_league_data: bool = False
     league_schedule_hours: tuple[int, ...] = (8, 20)
+    database_url: str | None = None
 
 
 def get_settings() -> Settings:
@@ -73,4 +74,5 @@ def get_settings() -> Settings:
         enable_league_scheduler=parse_bool(os.getenv("ENABLE_LEAGUE_SCHEDULER"),False),
         bootstrap_league_data=parse_bool(os.getenv("BOOTSTRAP_LEAGUE_DATA"),False),
         league_schedule_hours=schedule_hours,
+        database_url=os.getenv("DATABASE_URL") or None,
     )

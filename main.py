@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from src.api_client import FixtureAPIClient, FixtureAPIError
 from src.bracket_engine import BracketEngine, BracketError, predicted_champion
@@ -109,19 +110,28 @@ def show_snapshots(db: Database, limit: int) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="FIFA 2026 Dynamic Bracket Agent")
-    parser.add_argument("command", choices=("fetch", "update-bracket", "predict", "send", "daily", "snapshot", "web", "league-fetch", "league-history", "league-train", "league-predict", "league-evaluate", "league-daily"))
+    parser.add_argument("command", choices=("fetch", "update-bracket", "predict", "send", "daily", "snapshot", "web", "migrate-db", "league-fetch", "league-history", "league-train", "league-predict", "league-evaluate", "league-daily"))
     parser.add_argument("league", nargs="?", default="PL", help="League competition code (default: PL)")
     parser.add_argument("--season", type=int, help="football-data.org starting year, e.g. 2025 for 2025-26")
     parser.add_argument("--from-season", type=int, dest="from_season", help="first historical starting year")
     parser.add_argument("--to-season", type=int, dest="to_season", help="last historical starting year")
+    parser.add_argument("--source-database", type=Path, default=None, help="SQLite source for migrate-db")
     parser.add_argument("--limit", type=int, default=10, help="Snapshot rows to show")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     configure_logging(args.verbose)
     settings = get_settings()
-    db = Database(settings.database_path)
+    db = Database(settings.database_path, settings.database_url)
     try:
-        if args.command.startswith("league-"):
+        if args.command == "migrate-db":
+            if not settings.database_url:
+                raise ValueError("migrate-db requires DATABASE_URL")
+            from scripts.migrate_sqlite_to_postgres import migrate
+
+            report = migrate(args.source_database or settings.database_path, settings.database_url)
+            for table, counts in report.items():
+                print(f"{table}: {counts}")
+        elif args.command.startswith("league-"):
             from src.league_service import daily_league, fetch_league, fetch_league_history, predict_league, train_league
             if args.command == "league-fetch": result = fetch_league(db,args.league,args.season)
             elif args.command == "league-history": result = fetch_league_history(db,args.league,args.from_season,args.to_season)
@@ -152,7 +162,12 @@ def main() -> int:
             import uvicorn
 
             LOGGER.info("Dashboard available at http://localhost:8000")
-            uvicorn.run(create_app(settings.database_path), host="0.0.0.0", port=8000, log_level="info")
+            uvicorn.run(
+                create_app(settings.database_path, settings.database_url),
+                host="0.0.0.0",
+                port=8000,
+                log_level="info",
+            )
         return 0
     except (OSError, ValueError, FixtureAPIError, BracketError, TelegramError) as exc:
         LOGGER.error("%s", exc)

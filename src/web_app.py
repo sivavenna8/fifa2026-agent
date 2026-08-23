@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import json
+import os
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -83,22 +84,24 @@ def _dashboard_data(db: Database) -> dict[str, Any]:
     }
 
 
-def create_app(database_path: Path) -> FastAPI:
-    db = Database(database_path)
-    settings=get_settings()
+def create_app(database_path: Path, database_url: str | None = None) -> FastAPI:
+    is_vercel = bool(os.getenv("VERCEL"))
+    db = Database(database_path, database_url, initialize_schema=not is_vercel)
+    settings = get_settings()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        try:
-            _bootstrap_dashboard(db)
-        except Exception:
-            LOGGER.exception("FIFA archive bootstrap failed; league dashboard will remain available")
-        if settings.bootstrap_league_data:
+        if not is_vercel:
+            try:
+                _bootstrap_dashboard(db)
+            except Exception:
+                LOGGER.exception("FIFA archive bootstrap failed; league dashboard will remain available")
+        if not is_vercel and settings.bootstrap_league_data:
             from .league_service import bootstrap_league
             bootstrap_league(db,"PL")
-        if settings.enable_league_scheduler:
+        if not is_vercel and settings.enable_league_scheduler:
             from .scheduler import start_league_scheduler
-            start_league_scheduler(database_path,settings.league_schedule_hours,"PL")
+            start_league_scheduler(database_path,settings.league_schedule_hours,"PL",settings.database_url)
         yield
 
     app = FastAPI(title="SportsIntelAI", version="2.1.0", lifespan=lifespan)
@@ -147,10 +150,17 @@ def create_app(database_path: Path) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok","service":"sportsintelai"}
+        try:
+            db.rows("SELECT 1 AS ok")
+            database_status="connected"
+        except Exception:
+            LOGGER.exception("Health database probe failed")
+            database_status="unavailable"
+        return {"status":"ok" if database_status=="connected" else "degraded","service":"sportsintelai","database":database_status}
 
     return app
 
 
 # Production ASGI entrypoint used by Render and other Uvicorn deployments.
-app = create_app(get_settings().database_path)
+_settings = get_settings()
+app = create_app(_settings.database_path, _settings.database_url)
