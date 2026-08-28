@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import unittest
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
+from fastapi.testclient import TestClient
 
+from app import app
 from src.league_config import get_league
 from src.web_app import _prepare_league_match
 
@@ -54,7 +57,10 @@ class LeagueDashboardRenderingTests(unittest.TestCase):
             tomorrow=(today + timedelta(days=1)).isoformat(),
             next_matchday=None,
             matches=matches,
-            standings=[{"position": 1, "team": "Arsenal FC", "played": 3, "won": 3, "drawn": 0, "lost": 0, "goal_difference": 7, "points": 9}],
+            standings=[
+                {"position": 1, "team": "Manchester City FC", "played": 3, "won": 3, "drawn": 0, "lost": 0, "goal_difference": 7, "points": 9},
+                {"position": 2, "team": "Arsenal FC", "played": 3, "won": 2, "drawn": 1, "lost": 0, "goal_difference": 4, "points": 7},
+            ],
             metrics={"total": 0, "correct": 0, "accuracy": None, "high_confidence_accuracy": None, "last_10_correct": 0, "last_10_total": 0},
             backtest=backtest,
             last_updated=None,
@@ -84,13 +90,24 @@ class LeagueDashboardRenderingTests(unittest.TestCase):
         self.assertIn("× Incorrect", html)
         self.assertNotIn("Provisional Prediction", html)
 
-    def test_standings_use_one_semantic_table(self):
+    def test_standings_table_has_header_before_all_eight_cell_rows(self):
         html = self.render([])
-        self.assertIn('<table class="league-table">', html)
-        self.assertIn("<colgroup>", html)
-        self.assertIn('<th scope="col">Pos</th>', html)
-        self.assertIn('<th scope="row">Arsenal</th>', html)
-        self.assertNotIn('class="table-row', html)
+        table = re.search(r'<table class="league-table">(.*?)</table>', html, re.DOTALL).group(1)
+        thead_start, thead_end = table.index("<thead>"), table.index("</thead>")
+        tbody_start, tbody_end = table.index("<tbody>"), table.index("</tbody>")
+
+        self.assertLess(thead_start, tbody_start)
+        self.assertNotIn("<td", table[:thead_start])
+        self.assertEqual(table[thead_start:thead_end].count("<th "), 8)
+        self.assertEqual(table.count("<thead>"), 1)
+
+        body = table[tbody_start:tbody_end]
+        rows = re.findall(r"<tr>(.*?)</tr>", body, re.DOTALL)
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row.count("<td") == 8 for row in rows))
+        self.assertNotIn("<th", body)
+        self.assertNotIn("Manchester City", table[:tbody_start])
+        self.assertIn("Manchester City", body)
 
     def test_public_copy_hides_exact_model_and_feature_details(self):
         backtest = {
@@ -112,6 +129,21 @@ class LeagueDashboardRenderingTests(unittest.TestCase):
         self.assertNotIn(">Elo<", html)
         self.assertNotIn(">Goals<", html)
         self.assertNotIn(">Rest<", html)
+
+    def test_public_footer_has_no_github_link_and_keeps_fifa_archive(self):
+        html = self.render([])
+        self.assertNotIn("github.com", html.lower())
+        self.assertNotIn("View on GitHub", html)
+        self.assertIn('href="/fifa-2026"', html)
+        self.assertIn("&copy; 2026 SportsIntelAI", html)
+
+    def test_public_routes_render_without_github_link(self):
+        client = TestClient(app)
+        for path in ("/", "/league", "/fifa-2026"):
+            response = client.get(path)
+            self.assertEqual(response.status_code, 200, path)
+            self.assertNotIn("github.com", response.text.lower(), path)
+        self.assertIn('href="/fifa-2026"', client.get("/").text)
 
 
 if __name__ == "__main__":
