@@ -26,6 +26,28 @@ STAGES = ("Round of 32", "Round of 16", "Quarter-final", "Semi-final", "Final")
 LOGGER = logging.getLogger(__name__)
 
 
+def _prepare_league_match(match: dict[str, Any]) -> dict[str, Any]:
+    """Add presentation state without changing the stored prediction lifecycle."""
+    prepared = dict(match)
+    prepared["is_completed"] = prepared.get("status") == "completed"
+    prepared["has_final_score"] = prepared["is_completed"] and prepared.get("home_score") is not None and prepared.get("away_score") is not None
+    actual = prepared.get("actual_outcome") if prepared.get("actual_outcome") in {"H", "D", "A"} else None
+    if actual is None and prepared["has_final_score"]:
+        home_score, away_score = prepared["home_score"], prepared["away_score"]
+        actual = "H" if home_score > away_score else "A" if home_score < away_score else "D"
+    prepared["display_actual_outcome"] = actual
+    prepared["display_actual_result"] = (
+        f"{prepared['home_team'].replace(' FC', '')} win" if actual == "H" else
+        f"{prepared['away_team'].replace(' FC', '')} win" if actual == "A" else
+        "Draw" if actual == "D" else None
+    )
+    prepared["display_correct"] = prepared.get("correct")
+    if prepared["is_completed"] and prepared.get("predicted_outcome") and prepared["display_correct"] is None and actual:
+        prepared["display_correct"] = actual == prepared["predicted_outcome"]
+    prepared["was_official"] = bool(prepared.get("locked_at")) or prepared.get("prediction_status") in {"locked", "evaluated"}
+    return prepared
+
+
 def _bootstrap_dashboard(db: Database) -> None:
     """Populate an empty deployment and guarantee the first dashboard snapshot."""
     from main import fetch_data, rebuild
@@ -126,7 +148,7 @@ def create_app(database_path: Path, database_url: str | None = None) -> FastAPI:
     @app.get("/league", response_class=HTMLResponse)
     def league_dashboard(request: Request, league: str="PL", date: str | None=None) -> HTMLResponse:
         selected=date or date_type.today().isoformat(); selected_day=date_type.fromisoformat(selected); config=get_league(league)
-        matches=db.league_matches(config.code,selected); london=ZoneInfo("Europe/London")
+        matches=[_prepare_league_match(match) for match in db.league_matches(config.code,selected)]; london=ZoneInfo("Europe/London")
         for match in matches:
             if match.get("kickoff"):
                 kickoff=__import__("datetime").datetime.fromisoformat(match["kickoff"].replace("Z","+00:00")).astimezone(london)

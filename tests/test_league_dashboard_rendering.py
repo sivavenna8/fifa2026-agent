@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import re
+from copy import deepcopy
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -69,26 +70,56 @@ class LeagueDashboardRenderingTests(unittest.TestCase):
     def test_future_provisional_and_locked_states(self):
         provisional = self.render([prediction_match()])
         self.assertIn("Provisional Prediction", provisional)
-        self.assertNotIn("Finished · FT", provisional)
+        self.assertNotIn("Actual result", provisional)
+        self.assertNotIn('class="scoreline"', provisional)
+        self.assertNotIn("CORRECT", provisional)
 
         locked = self.render([prediction_match(prediction_status="locked", locked_at="2026-08-23T12:00:00Z")])
         self.assertIn("Locked · Official Agent Pick", locked)
-        self.assertNotIn("Finished · FT", locked)
+        self.assertNotIn("Actual result", locked)
+        self.assertNotIn('class="scoreline"', locked)
 
     def test_completed_correct_uses_original_probabilities(self):
-        html = self.render([prediction_match(status="completed", home_score=2, away_score=0)])
-        self.assertIn("Finished · FT", html)
+        html = self.render([prediction_match(status="completed", home_score=2, away_score=0, prediction_status="evaluated", locked_at="2026-08-22T12:00:00Z", actual_outcome="H", correct=True)])
+        self.assertIn("Completed", html)
         self.assertNotIn("Provisional Prediction", html)
-        self.assertIn("Original prediction", html)
+        self.assertIn('<em>2</em><span>—</span><em>0</em>', html)
+        self.assertIn("FT", html)
+        self.assertIn("Actual result", html)
+        self.assertIn("Manchester City win", html)
+        self.assertIn("Official pick", html)
         self.assertIn("53.4%", html)
-        self.assertIn("✓ Correct", html)
+        self.assertIn("33.0%", html)
+        self.assertIn("13.6%", html)
+        self.assertIn("✓ CORRECT", html)
 
     def test_completed_incorrect_locked_pick_is_official(self):
-        html = self.render([prediction_match(status="completed", home_score=0, away_score=1, prediction_status="evaluated", locked_at="2026-08-22T12:00:00Z", correct=False)])
-        self.assertIn("Finished · FT", html)
-        self.assertIn("Official locked prediction", html)
-        self.assertIn("× Incorrect", html)
+        html = self.render([prediction_match(status="completed", home_score=0, away_score=1, prediction_status="evaluated", locked_at="2026-08-22T12:00:00Z", actual_outcome="A", correct=False)])
+        self.assertIn("Completed", html)
+        self.assertIn("Bournemouth win", html)
+        self.assertIn("Official pick", html)
+        self.assertIn("× INCORRECT", html)
         self.assertNotIn("Provisional Prediction", html)
+
+    def test_completed_draw_shows_draw_and_correct_draw_pick(self):
+        html = self.render([prediction_match(status="completed", home_score=1, away_score=1, predicted_outcome="D", prediction_status="evaluated", locked_at="2026-08-22T12:00:00Z", actual_outcome="D", correct=True)])
+        self.assertIn('<em>1</em><span>—</span><em>1</em>', html)
+        self.assertRegex(html, r"Actual result</small><strong>Draw</strong>")
+        self.assertIn("✓ CORRECT", html)
+
+    def test_presentation_helper_does_not_mutate_prediction_or_evaluation_data(self):
+        source = {
+            "status": "completed", "home_team": "Manchester City FC", "away_team": "Bournemouth FC",
+            "home_score": 2, "away_score": 0, "home_probability": 0.534, "draw_probability": 0.330,
+            "away_probability": 0.136, "predicted_outcome": "H", "confidence": "High",
+            "actual_outcome": "H", "correct": 1, "prediction_status": "evaluated", "locked_at": "2026-08-22T12:00:00Z",
+        }
+        before = deepcopy(source)
+        prepared = _prepare_league_match(source)
+        self.assertEqual(source, before)
+        self.assertIsNot(prepared, source)
+        for field in ("home_probability", "draw_probability", "away_probability", "predicted_outcome", "confidence", "actual_outcome", "correct", "prediction_status", "locked_at"):
+            self.assertEqual(prepared[field], before[field])
 
     def test_standings_table_has_header_before_all_eight_cell_rows(self):
         html = self.render([])
