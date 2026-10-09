@@ -4,6 +4,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import re
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
@@ -49,4 +50,11 @@ def check(request: Request, body: CheckRequest):
     except Exception as exc:
         LOGGER.error('[telegram-agent] HTTP worker failed (%s)', type(exc).__name__)
         raise HTTPException(503, 'Publisher unavailable; inspect configuration/data') from None
-    return {'publications': outcomes}
+    response = {'publications': outcomes}
+    if body.dry_run:
+        commit = os.getenv('VERCEL_GIT_COMMIT_SHA', '').strip()
+        response.update(
+            publisher_enabled=publishing_enabled(),
+            deployment_commit=commit if re.fullmatch(r'[0-9a-fA-F]{40}|[0-9a-fA-F]{64}', commit) else None,
+        )
+    return response

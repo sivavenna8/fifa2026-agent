@@ -571,6 +571,55 @@ class HTTPWorkerTests(unittest.TestCase):
         self.db.assert_called_once_with(Path('unused'), 'postgresql://mock', initialize_schema=False, read_only=True, bounded_worker=True)
         self.tick.assert_called_once_with(self.db.return_value, dry_run=True)
 
+    def assert_dry_run_observability(self, flag, expected):
+        commit = 'a' * 40
+        with patch.dict(os.environ, VERCEL_GIT_COMMIT_SHA=commit):
+            if flag is None:
+                os.environ.pop('TELEGRAM_PUBLISHER_ENABLED', None)
+            else:
+                os.environ['TELEGRAM_PUBLISHER_ENABLED'] = flag
+            response = self.post(dry_run=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'publications': self.tick.return_value,
+                                          'publisher_enabled': expected, 'deployment_commit': commit})
+        self.db.assert_called_once_with(Path('unused'), 'postgresql://mock', initialize_schema=False, read_only=True, bounded_worker=True)
+        self.tick.assert_called_once_with(self.db.return_value, dry_run=True)
+        self.assertNotIn('postgresql://mock', response.text)
+        self.assertNotIn('x' * 32, response.text)
+
+    def test_dry_run_observability_enabled(self):
+        self.assert_dry_run_observability('true', True)
+
+    def test_dry_run_observability_disabled(self):
+        self.assert_dry_run_observability('false', False)
+
+    def test_dry_run_observability_missing_flag(self):
+        self.assert_dry_run_observability(None, False)
+
+    def test_dry_run_deployment_commit_unavailable_or_invalid_is_null(self):
+        for value in [None, '', ' ', 'not-a-commit', 'credential-like-value']:
+            with self.subTest(value=value), patch.dict(os.environ):
+                if value is None: os.environ.pop('VERCEL_GIT_COMMIT_SHA', None)
+                else: os.environ['VERCEL_GIT_COMMIT_SHA'] = value
+                response = self.post(dry_run=True)
+                self.assertEqual(response.status_code, 200)
+                self.assertIsNone(response.json()['deployment_commit'])
+                self.assertEqual(set(response.json()), {'publications', 'publisher_enabled', 'deployment_commit'})
+
+    def test_dry_run_metadata_requires_authentication(self):
+        for headers in [{}, {'Authorization': 'Bearer invalid'}]:
+            response = self.client.post('/internal/telegram/check', headers=headers, json={'dry_run': True})
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(response.json(), {'detail': 'Unauthorized'})
+        self.db.assert_not_called()
+        self.tick.assert_not_called()
+
+    def test_live_response_unchanged_by_observability(self):
+        with patch.dict(os.environ, VERCEL_GIT_COMMIT_SHA='a' * 40):
+            response = self.post()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'publications': self.tick.return_value})
+
     def test_disabled_http_blocks_live_but_allows_authenticated_preview(self):
         with patch.dict(os.environ, TELEGRAM_PUBLISHER_ENABLED='false'):
             self.assertEqual(self.post().status_code, 503)
