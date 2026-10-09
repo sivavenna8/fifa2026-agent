@@ -1,0 +1,59 @@
+name: SportsIntelAI Match-Day Telegram Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      publication:
+        description: Publication to preview or send
+        type: choice
+        options: [MORNING, RESULTS]
+        default: MORNING
+      match_date:
+        description: Optional match-day date YYYY-MM-DD
+        type: string
+        default: ""
+      dry_run:
+        description: Preview only (no refresh, database writes, or Telegram calls)
+        type: boolean
+        default: true
+
+# Serialize with the existing hourly league refresh.
+concurrency:
+  group: sportsintel-league-agent
+  cancel-in-progress: false
+
+jobs:
+  telegram:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_PUBLISHER_ENABLED: ${{ vars.TELEGRAM_PUBLISHER_ENABLED || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Require shared production database
+        run: python -c "import os; assert os.environ.get('DATABASE_URL'), 'DATABASE_URL is required'"
+      - name: Preview or manually publish persisted data
+        env:
+          PUBLICATION_KIND: ${{ inputs.publication }}
+          PUBLICATION_DATE: ${{ inputs.match_date }}
+          PUBLICATION_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+          command = [sys.executable, "main.py", "league-telegram", "PL", "--publication", os.environ["PUBLICATION_KIND"]]
+          if os.environ.get("PUBLICATION_DATE"):
+              command += ["--date", os.environ["PUBLICATION_DATE"]]
+          if os.environ.get("PUBLICATION_DRY_RUN") == "true":
+              command += ["--dry-run"]
+          sys.exit(subprocess.call(command))
+          PY

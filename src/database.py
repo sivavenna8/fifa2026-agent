@@ -4,7 +4,7 @@ import json
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date as date_type, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -115,13 +115,15 @@ class _PostgresConnection:
 
 
 class Database:
-    def __init__(self, path: Path, database_url: str | None = None, initialize_schema: bool = True):
+    def __init__(self, path: Path, database_url: str | None = None, initialize_schema: bool = True, read_only: bool = False, bounded_worker: bool = False):
         self.path = path
         self.database_url = database_url or os.getenv("DATABASE_URL") or None
         self.backend = "postgres" if self.database_url else "sqlite"
-        if self.backend == "sqlite":
+        self.read_only = read_only
+        self.bounded_worker = bounded_worker
+        if self.backend == "sqlite" and not read_only:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        if initialize_schema:
+        if initialize_schema and not read_only:
             self.initialize()
 
     @contextmanager
@@ -131,11 +133,16 @@ class Database:
                 import psycopg
                 from psycopg.rows import dict_row
             except ImportError as exc: raise RuntimeError("Postgres requires psycopg[binary]") from exc
-            raw=psycopg.connect(self.database_url,row_factory=dict_row,prepare_threshold=None)
+            options = {'connect_timeout': 3, 'options': '-c statement_timeout=5000 -c lock_timeout=1000'} if self.bounded_worker else {}
+            raw=psycopg.connect(self.database_url,row_factory=dict_row,prepare_threshold=None, **options)
             connection: Any=_PostgresConnection(raw)
+            if self.read_only:
+                connection.execute("SET TRANSACTION READ ONLY")
         else:
-            raw=sqlite3.connect(self.path,timeout=10); raw.row_factory=sqlite3.Row
-            raw.execute("PRAGMA journal_mode = MEMORY"); raw.execute("PRAGMA temp_store = MEMORY"); raw.execute("PRAGMA foreign_keys = ON")
+            raw=sqlite3.connect(self.path.resolve().as_uri()+"?mode=ro", uri=True, timeout=10) if self.read_only else sqlite3.connect(self.path,timeout=10)
+            raw.row_factory=sqlite3.Row
+            if not self.read_only:
+                raw.execute("PRAGMA journal_mode = MEMORY"); raw.execute("PRAGMA temp_store = MEMORY"); raw.execute("PRAGMA foreign_keys = ON")
             connection=raw
         try:
             yield connection
@@ -162,6 +169,8 @@ class Database:
                 prediction_columns={row[1] for row in connection.execute("PRAGMA table_info(league_predictions)")}
                 if "prediction_status" not in prediction_columns: connection.execute("ALTER TABLE league_predictions ADD COLUMN prediction_status TEXT NOT NULL DEFAULT 'provisional'")
                 if "generated_at" not in prediction_columns: connection.execute("ALTER TABLE league_predictions ADD COLUMN generated_at TEXT")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_league_predictions_evaluated ON league_predictions(league_code, evaluated_at DESC, id DESC) WHERE prediction_status='evaluated' AND evaluated_at IS NOT NULL")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_model_metrics_latest ON model_metrics(league_code, id DESC)")
             # One-time lifecycle migration: preserve evaluated rows, retain picks
             # already inside 48h, and make the remaining legacy season-long
             # locks refreshable provisional previews.
@@ -217,7 +226,9 @@ class Database:
                         )
         return inserted, updated
 
-    def rows(self, query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    def rows(self, query: str, params: tuple[Any, ...] = (), connection: Any = None) -> list[dict[str, Any]]:
+        if connection is not None:
+            return [dict(row) for row in connection.execute(query, params).fetchall()]
         with self.connect() as connection:
             return [dict(row) for row in connection.execute(query, params).fetchall()]
 
@@ -297,11 +308,92 @@ class Database:
                 inserted += old is None; updated += old is not None
         return inserted, updated
 
-    def league_matches(self, code: str, date: str | None = None) -> list[dict[str, Any]]:
-        q = "SELECT m.*,p.home_probability,p.draw_probability,p.away_probability,p.predicted_outcome,p.confidence,p.correct,p.prediction_status,p.generated_at,p.locked_at,p.model_version FROM league_matches m LEFT JOIN league_predictions p ON p.match_id=m.id WHERE m.league_code=?"
+    def league_matches(self, code: str, date: str | None = None, connection: Any = None) -> list[dict[str, Any]]:
+        q = "SELECT m.*,p.home_probability,p.draw_probability,p.away_probability,p.predicted_outcome,p.confidence,p.actual_outcome,p.correct,p.evaluated_at,p.prediction_status,p.generated_at,p.locked_at,p.model_version FROM league_matches m LEFT JOIN league_predictions p ON p.match_id=m.id WHERE m.league_code=?"
         params: tuple[Any,...] = (code,)
-        if date: q += " AND substr(m.kickoff,1,10)=?"; params += (date,)
-        return self.rows(q+" ORDER BY m.kickoff,m.id", params)
+        if date:
+            selected_day=date_type.fromisoformat(date)
+            q += " AND m.kickoff>=? AND m.kickoff<?"
+            params += (selected_day.isoformat(),(selected_day+timedelta(days=1)).isoformat())
+        return self.rows(q+" ORDER BY m.kickoff,m.id", params, connection=connection)
+
+    @staticmethod
+    def _league_metrics_from_connection(connection: Any, code: str) -> dict[str, Any]:
+        row=connection.execute(
+            """WITH eligible AS (
+                SELECT id,evaluated_at,predicted_outcome,confidence,correct
+                FROM league_predictions
+                WHERE league_code=? AND prediction_status='evaluated' AND evaluated_at IS NOT NULL
+            ), recent AS (
+                SELECT correct FROM eligible ORDER BY evaluated_at DESC,id DESC LIMIT 10
+            )
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN correct=1 THEN 1 ELSE 0 END),0) AS correct,
+                COALESCE(SUM(CASE WHEN predicted_outcome='H' THEN 1 ELSE 0 END),0) AS home_total,
+                COALESCE(SUM(CASE WHEN predicted_outcome='H' AND correct=1 THEN 1 ELSE 0 END),0) AS home_correct,
+                COALESCE(SUM(CASE WHEN predicted_outcome='D' THEN 1 ELSE 0 END),0) AS draw_total,
+                COALESCE(SUM(CASE WHEN predicted_outcome='D' AND correct=1 THEN 1 ELSE 0 END),0) AS draw_correct,
+                COALESCE(SUM(CASE WHEN predicted_outcome='A' THEN 1 ELSE 0 END),0) AS away_total,
+                COALESCE(SUM(CASE WHEN predicted_outcome='A' AND correct=1 THEN 1 ELSE 0 END),0) AS away_correct,
+                COALESCE(SUM(CASE WHEN confidence='High' THEN 1 ELSE 0 END),0) AS high_total,
+                COALESCE(SUM(CASE WHEN confidence='High' AND correct=1 THEN 1 ELSE 0 END),0) AS high_correct,
+                (SELECT COUNT(*) FROM recent) AS last_10_total,
+                (SELECT COALESCE(SUM(CASE WHEN correct=1 THEN 1 ELSE 0 END),0) FROM recent) AS last_10_correct
+            FROM eligible""",
+            (code,),
+        ).fetchone()
+        values=dict(row)
+        rate=lambda correct,total: correct/total if total else None
+        return {
+            "total":values["total"],
+            "correct":values["correct"],
+            "accuracy":rate(values["correct"],values["total"]),
+            "home_accuracy":rate(values["home_correct"],values["home_total"]),
+            "draw_accuracy":rate(values["draw_correct"],values["draw_total"]),
+            "away_accuracy":rate(values["away_correct"],values["away_total"]),
+            "high_confidence_accuracy":rate(values["high_correct"],values["high_total"]),
+            "last_10_correct":values["last_10_correct"],
+            "last_10_total":values["last_10_total"],
+        }
+
+    def league_dashboard_data(self, code: str, selected_date: str) -> dict[str, Any]:
+        selected_day=date_type.fromisoformat(selected_date)
+        start=selected_day.isoformat()
+        end=(selected_day+timedelta(days=1)).isoformat()
+        match_query="""SELECT m.*,p.home_probability,p.draw_probability,p.away_probability,
+            p.predicted_outcome,p.confidence,p.actual_outcome,p.correct,p.evaluated_at,
+            p.prediction_status,p.generated_at,p.locked_at,p.model_version
+            FROM league_matches m LEFT JOIN league_predictions p ON p.match_id=m.id
+            WHERE m.league_code=? AND m.kickoff>=? AND m.kickoff<?
+            ORDER BY m.kickoff,m.id"""
+        with self.connect() as connection:
+            matches=[dict(row) for row in connection.execute(match_query,(code,start,end)).fetchall()]
+            standings=[dict(row) for row in connection.execute(
+                "SELECT * FROM league_standings WHERE league_code=? ORDER BY position",(code,)
+            ).fetchall()]
+            backtest_row=connection.execute(
+                "SELECT * FROM model_metrics WHERE league_code=? ORDER BY id DESC LIMIT 1",(code,)
+            ).fetchone()
+            metadata_row=connection.execute(
+                """SELECT
+                    (SELECT MIN(kickoff) FROM league_matches WHERE league_code=? AND kickoff>=?) AS next_kickoff,
+                    (SELECT MAX(updated_at) FROM league_matches WHERE league_code=?) AS updated_at""",
+                (code,end,code),
+            ).fetchone()
+            metrics=self._league_metrics_from_connection(connection,code)
+        metadata=dict(metadata_row)
+        backtest=dict(backtest_row) if backtest_row else None
+        if backtest:
+            backtest["metrics"]=json.loads(backtest["metrics_json"])
+        return {
+            "matches":matches,
+            "standings":standings,
+            "backtest":backtest,
+            "metrics":metrics,
+            "next_matchday":metadata["next_kickoff"][:10] if metadata["next_kickoff"] else None,
+            "last_updated":metadata["updated_at"],
+        }
 
     def save_league_prediction(self, match_id: str, code: str, probabilities: dict[str,float], features: list[float], model_name: str="logistic-regression", model_version: str="v2", lock_window_hours: int=48, now: datetime | None=None) -> str | None:
         current=now or datetime.now(timezone.utc); now_text=current.isoformat(timespec="seconds"); pick=max(probabilities,key=probabilities.get); confidence="High" if probabilities[pick]>=.65 else "Medium" if probabilities[pick]>=.50 else "Low"
@@ -334,7 +426,5 @@ class Database:
         return count
 
     def league_metrics(self, code: str) -> dict[str, Any]:
-        rows=self.rows("SELECT * FROM league_predictions WHERE league_code=? AND prediction_status='evaluated' AND evaluated_at IS NOT NULL ORDER BY evaluated_at",(code,)); total=len(rows); correct=sum(r["correct"] for r in rows)
-        by={o:[r for r in rows if r["predicted_outcome"]==o] for o in "HDA"}; high=[r for r in rows if r["confidence"]=="High"]; last=rows[-10:]
-        rate=lambda rs: (sum(r["correct"] for r in rs)/len(rs) if rs else None)
-        return {"total":total,"correct":correct,"accuracy":rate(rows),"home_accuracy":rate(by["H"]),"draw_accuracy":rate(by["D"]),"away_accuracy":rate(by["A"]),"high_confidence_accuracy":rate(high),"last_10_correct":sum(r["correct"] for r in last),"last_10_total":len(last)}
+        with self.connect() as connection:
+            return self._league_metrics_from_connection(connection,code)

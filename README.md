@@ -163,7 +163,7 @@ Deployment steps:
 3. Add Vercel environment variable `DATABASE_URL` using the Supabase transaction-pooler URL. Do not set `ENABLE_LEAGUE_SCHEDULER` or `BOOTSTRAP_LEAGUE_DATA` on Vercel.
 4. Import the Git repository into Vercel and deploy. `vercel.json` routes all requests to FastAPI.
 5. Add GitHub repository secrets `DATABASE_URL` and `FOOTBALL_DATA_API_KEY`. Optionally add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
-6. Run the **SportsIntelAI League Agent** workflow manually once. It then runs `python main.py league-daily PL` at 08:00 and 20:00 UTC, with overlapping runs prevented by workflow concurrency.
+6. Run the **SportsIntelAI League Agent** workflow manually once. It then runs `python main.py league-daily PL` hourly, with overlapping runs prevented by workflow concurrency.
 7. Verify `/health` reports `status: ok` and `database: connected`, then check `/`, `/league`, and `/fifa-2026`.
 
 The football-data.org key is needed only by GitHub Actions/CLI ingestion, not by public page requests. Never commit Supabase credentials or API tokens. The existing `render.yaml` remains as an optional alternative deployment path, not the primary architecture.
@@ -177,3 +177,26 @@ The football-data.org key is needed only by GitHub Actions/CLI ingestion, not by
 - `agent_runs`: command status and human-readable update summary.
 
 Completed results are never overwritten by a non-completed copy from a stale feed. Re-running the same input creates an auditable snapshot but does not mutate the actual result.
+
+## Telegram publishing V2
+
+Supabase Cron → authenticated lightweight FastAPI worker on the existing Vercel
+host → persisted Supabase predictions/results → Telegram. The worker performs
+no league ingestion, training, prediction generation, or locking.
+
+- Morning: 09:00 Europe/London, retries until noon and always before kickoff.
+- Results: 23:30 Europe/London, retries until noon the following day.
+- Durable identities: `PL:YYYY-MM-DD:MORNING` and `PL:YYYY-MM-DD:RESULTS`.
+- GitHub Actions continues the hourly league refresh; Telegram's GitHub workflow
+  is manual-only. Supabase configuration is supplied paused, not enabled.
+
+Preview actual stored data without database writes or Telegram calls:
+
+```powershell
+python main.py league-telegram PL --publication MORNING --dry-run
+python main.py league-telegram PL --publication RESULTS --date 2026-10-10 --dry-run
+```
+
+See [Telegram V2 operations](docs/telegram_publishing_v2.md) for the architecture
+audit, explicit migration/preflight/Cron SQL, authentication and secrets,
+integration tests, freshness checks, host limits, monitoring, and recovery.

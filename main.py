@@ -11,7 +11,7 @@ from src.config import get_settings
 from src.database import Database
 from src.fixtures_loader import load_fixtures, load_strengths
 from src.message_builder import build_message, change_summary, compare_snapshots, render_table
-from src.telegram_bot import TelegramError, send_message
+from src.telegram_bot import TelegramError, publishing_enabled, send_message
 
 LOGGER = logging.getLogger("fifa2026")
 
@@ -91,11 +91,15 @@ def send_latest(db: Database) -> None:
         bracket = snapshots[0]["bracket"]
         previous = snapshots[1]["bracket"] if len(snapshots) > 1 else None
     message = build_message(bracket, previous)
+    if not publishing_enabled('fifa'):
+        LOGGER.info('FIFA Telegram publishing is disabled; printing briefing preview')
+        print(message)
+        return
     if not settings.telegram_token or not settings.telegram_chat_id:
         LOGGER.warning("Telegram credentials are not configured; printing briefing preview")
         print(message)
         return
-    send_message(settings.telegram_token, settings.telegram_chat_id, message, settings.request_timeout)
+    send_message(settings.telegram_token, settings.telegram_chat_id, message, settings.request_timeout, publisher='fifa')
     LOGGER.info("Telegram briefing sent successfully")
 
 
@@ -110,7 +114,7 @@ def show_snapshots(db: Database, limit: int) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="FIFA 2026 Dynamic Bracket Agent")
-    parser.add_argument("command", choices=("fetch", "update-bracket", "predict", "send", "daily", "snapshot", "web", "migrate-db", "league-fetch", "league-history", "league-train", "league-predict", "league-evaluate", "league-daily"))
+    parser.add_argument("command", choices=("fetch", "update-bracket", "predict", "send", "daily", "snapshot", "web", "migrate-db", "league-fetch", "league-history", "league-train", "league-predict", "league-evaluate", "league-daily", "league-telegram"))
     parser.add_argument("league", nargs="?", default="PL", help="League competition code (default: PL)")
     parser.add_argument("--season", type=int, help="football-data.org starting year, e.g. 2025 for 2025-26")
     parser.add_argument("--from-season", type=int, dest="from_season", help="first historical starting year")
@@ -118,11 +122,33 @@ def main() -> int:
     parser.add_argument("--source-database", type=Path, default=None, help="SQLite source for migrate-db")
     parser.add_argument("--limit", type=int, default=10, help="Snapshot rows to show")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="Preview league Telegram messages without writes or sending")
+    parser.add_argument("--scheduled", action="store_true", help="Compatibility flag; V2 always enforces publication windows")
+    parser.add_argument("--publication", choices=("MORNING", "RESULTS"), default="MORNING")
+    parser.add_argument("--date", dest="publication_date", help="Publication match-day date YYYY-MM-DD")
+    parser.add_argument("--recover", action="store_true", help="Operator recovery for RESULTS beyond the retry window")
     args = parser.parse_args()
+    if (args.dry_run or args.scheduled or args.publication_date or args.recover or args.publication != 'MORNING') and args.command != "league-telegram":
+        parser.error("--dry-run and --scheduled apply only to league-telegram")
     configure_logging(args.verbose)
     settings = get_settings()
-    db = Database(settings.database_path, settings.database_url)
     try:
+        if args.command == "league-telegram":
+            from src.league_telegram import run_match_day
+            db = Database(settings.database_path, settings.database_url, initialize_schema=False, read_only=args.dry_run)
+            try:
+                status = run_match_day(db, args.league, dry_run=args.dry_run, scheduled=args.scheduled,
+                                      publication=args.publication, target_date=args.publication_date, recover=args.recover)
+                if status in {'disabled', 'expired', 'plan-changed'}:
+                    return 1
+            except (ValueError, TelegramError):
+                raise
+            except Exception as exc:
+                # Database/network exceptions may include connection credentials.
+                LOGGER.error("[telegram-agent] Execution failed (%s); inspect database availability/configuration", type(exc).__name__)
+                return 1
+            return 0
+        db = Database(settings.database_path, settings.database_url)
         if args.command == "migrate-db":
             if not settings.database_url:
                 raise ValueError("migrate-db requires DATABASE_URL")

@@ -23,6 +23,23 @@ def production_model_path(code: str) -> Path:
 
 
 def fetch_league(db: Database, code: str, season: int | None = None) -> dict[str, Any]:
+    """Track successful current-fixture refreshes for publication freshness."""
+    if season is not None:
+        return _fetch_league(db, code, season)
+    league = get_league(code)
+    run_id = db.start_run(f"league-fixtures-refresh:{league.code}")
+    try:
+        report = _fetch_league(db, league.code, season)
+        if not report['matches']:
+            raise ValueError("Current fixture feed returned no matches; freshness not confirmed")
+        db.finish_run(run_id, 'success', json.dumps(report))
+        return report
+    except Exception:
+        db.finish_run(run_id, 'failed', 'Current fixture refresh failed')
+        raise
+
+
+def _fetch_league(db: Database, code: str, season: int | None = None) -> dict[str, Any]:
     league=get_league(code); settings=get_settings()
     if not settings.api_key: raise ValueError("FOOTBALL_DATA_API_KEY is required for league fetching")
     client=LeagueAPIClient(DEFAULT_FOOTBALL_DATA_BASE_URL if not settings.api_url else settings.api_url.split("/competitions/")[0],settings.api_key,settings.request_timeout)

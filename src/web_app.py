@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import json
 import os
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -127,6 +126,8 @@ def create_app(database_path: Path, database_url: str | None = None) -> FastAPI:
         yield
 
     app = FastAPI(title="SportsIntelAI", version="2.1.0", lifespan=lifespan)
+    from .telegram_worker import router as telegram_router
+    app.include_router(telegram_router)
     templates = Jinja2Templates(directory=ROOT / "templates")
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
@@ -148,18 +149,13 @@ def create_app(database_path: Path, database_url: str | None = None) -> FastAPI:
     @app.get("/league", response_class=HTMLResponse)
     def league_dashboard(request: Request, league: str="PL", date: str | None=None) -> HTMLResponse:
         selected=date or date_type.today().isoformat(); selected_day=date_type.fromisoformat(selected); config=get_league(league)
-        matches=[_prepare_league_match(match) for match in db.league_matches(config.code,selected)]; london=ZoneInfo("Europe/London")
+        dashboard=db.league_dashboard_data(config.code,selected)
+        matches=[_prepare_league_match(match) for match in dashboard["matches"]]; london=ZoneInfo("Europe/London")
         for match in matches:
             if match.get("kickoff"):
                 kickoff=__import__("datetime").datetime.fromisoformat(match["kickoff"].replace("Z","+00:00")).astimezone(london)
                 match["kickoff_uk"]=kickoff.strftime("%d %b · %H:%M UK").upper()
-        standings=db.rows("SELECT * FROM league_standings WHERE league_code=? ORDER BY position",(config.code,))
-        backtests=db.rows("SELECT * FROM model_metrics WHERE league_code=? ORDER BY id DESC LIMIT 1",(config.code,))
-        if backtests:
-            backtests[0]["metrics"]=json.loads(backtests[0]["metrics_json"])
-        next_rows=db.rows("SELECT substr(kickoff,1,10) match_date FROM league_matches WHERE league_code=? AND substr(kickoff,1,10)>? GROUP BY match_date ORDER BY match_date LIMIT 1",(config.code,selected))
-        updated=db.rows("SELECT MAX(updated_at) updated_at FROM league_matches WHERE league_code=?",(config.code,))
-        return templates.TemplateResponse(request=request,name="league_dashboard.html",context={"league":config,"leagues":[item for item in LEAGUES.values() if item.enabled],"selected_date":selected,"display_date":selected_day.strftime("%d %b %Y").upper(),"previous_date":(selected_day-timedelta(days=1)).isoformat(),"next_date":(selected_day+timedelta(days=1)).isoformat(),"today":date_type.today().isoformat(),"yesterday":(date_type.today()-timedelta(days=1)).isoformat(),"tomorrow":(date_type.today()+timedelta(days=1)).isoformat(),"next_matchday":next_rows[0]["match_date"] if next_rows else None,"matches":matches,"standings":standings,"metrics":db.league_metrics(config.code),"backtest":backtests[0] if backtests else None,"last_updated":updated[0]["updated_at"] if updated else None})
+        return templates.TemplateResponse(request=request,name="league_dashboard.html",context={"league":config,"leagues":[item for item in LEAGUES.values() if item.enabled],"selected_date":selected,"display_date":selected_day.strftime("%d %b %Y").upper(),"previous_date":(selected_day-timedelta(days=1)).isoformat(),"next_date":(selected_day+timedelta(days=1)).isoformat(),"today":date_type.today().isoformat(),"yesterday":(date_type.today()-timedelta(days=1)).isoformat(),"tomorrow":(date_type.today()+timedelta(days=1)).isoformat(),"next_matchday":dashboard["next_matchday"],"matches":matches,"standings":dashboard["standings"],"metrics":dashboard["metrics"],"backtest":dashboard["backtest"],"last_updated":dashboard["last_updated"]})
 
     @app.get("/api/leagues/{league}/matches")
     def league_matches(league: str, date: str | None=None): return {"league":league.upper(),"date":date,"matches":db.league_matches(league.upper(),date)}
