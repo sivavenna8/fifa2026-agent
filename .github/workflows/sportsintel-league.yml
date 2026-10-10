@@ -1,8 +1,12 @@
 name: SportsIntelAI League Agent
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
   schedule:
+    # Retain until the paused Supabase dispatcher has been tested and approved.
     - cron: "0 * * * *"
 
 concurrency:
@@ -20,8 +24,8 @@ jobs:
       FOOTBALL_DATA_COMPETITION: WC
       USE_SAMPLE_DATA: "false"
       MODEL_PATH: models/pl_model.pkl
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_PUBLISHER_ENABLED: "false"
+      FIFA_TELEGRAM_ENABLED: "false"
 
     steps:
       - name: Checkout

@@ -96,11 +96,20 @@ def predict_league(db: Database, code: str, model_dir: Path | None=None, lock_wi
 
 
 def daily_league(db: Database, code: str) -> dict[str,Any]:
-    fetched=fetch_league(db,code); evaluated=db.evaluate_league_predictions(code)
-    artifact=production_model_path(code)
-    if not artifact.exists(): raise ValueError(f"No production model at {artifact}; train explicitly before running league-daily")
-    predicted=predict_league(db,code)
-    return {**fetched,"evaluated":evaluated,"predictions_refreshed":predicted,"performance":db.league_metrics(code)}
+    code = get_league(code).code
+    run_id = db.start_run(f"league-daily:{code}")
+    try:
+        fetched=fetch_league(db,code); evaluated=db.evaluate_league_predictions(code)
+        artifact=production_model_path(code)
+        if not artifact.exists(): raise ValueError(f"No production model at {artifact}; train explicitly before running league-daily")
+        predicted=predict_league(db,code)
+        report = {**fetched,"evaluated":evaluated,"predictions_refreshed":predicted,"performance":db.league_metrics(code)}
+        db.finish_run(run_id, 'success', json.dumps(report))
+        return report
+    except Exception:
+        # Do not persist exception strings that may contain connection details.
+        db.finish_run(run_id, 'failed', 'League refresh pipeline failed')
+        raise
 
 
 def bootstrap_league(db: Database, code: str="PL") -> None:
